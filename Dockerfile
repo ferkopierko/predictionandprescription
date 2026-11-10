@@ -12,8 +12,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py opatrenia.py ./
+COPY app.py opatrenia.py nvd.py prevadzka.py trenovanie.py ./
 COPY figures ./figures
+
+RUN mkdir runtime && chown app:app runtime
 
 USER app
 

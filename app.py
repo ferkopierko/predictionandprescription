@@ -3,6 +3,7 @@
 Spustenie: streamlit run app.py
 """
 
+import json
 import re
 
 import altair as alt
@@ -10,6 +11,7 @@ import pandas as pd
 import streamlit as st
 
 import opatrenia as op
+import prevadzka
 
 st.set_page_config(page_title="Opatrenia pre zraniteľnosti", page_icon="🛡️", layout="wide")
 
@@ -52,9 +54,15 @@ def cwe_label(cwe):
     return f"{cwe}: {op.CWE_NAMES[cwe]}" if cwe in op.CWE_NAMES else cwe
 
 
-@st.cache_resource(show_spinner="Pripravujem model. Pri prvom spustení ho treba naučiť, trvá to 1 až 3 minúty.")
-def get_bundle():
-    return op.load_or_train()
+@st.cache_resource(show_spinner="Pripravujem model. Pri prvom spustení ho treba naučiť, trvá to 1 až 3 minúty.", max_entries=1)
+def get_bundle(_path_key, _modified):
+    return op.load_active()
+
+
+def active_bundle():
+    """Načíta aktuálny model. Po pretrénovaní sa zmení dátum súboru a model sa obnoví."""
+    path = op.active_model_path()
+    return get_bundle(str(path), path.stat().st_mtime if path.exists() else 0)
 
 
 @st.cache_data(show_spinner=False)
@@ -279,6 +287,99 @@ def overview_tab():
             st.image(str(path), width=900)
 
 
+def utc_label(value):
+    return f"{value.replace('T', ' ')[:16]} UTC" if value else "zatiaľ nie"
+
+
+def show_model_report():
+    if not op.PRODUCTION_REPORT_PATH.exists():
+        return
+    report = json.loads(op.PRODUCTION_REPORT_PATH.read_text(encoding="utf-8"))
+    with st.expander(f"Prevádzkový model, naučený {report['natrenovane']}"):
+        names = {
+            "novy_model": "Nový model",
+            "novy_model_iba_hodnotenie_nvd": "Nový model, iba hodnotenia NVD",
+            "novy_model_iba_hodnotenie_cna": "Nový model, iba hodnotenia CNA",
+            "povodny_model_do_2018": "Pôvodný model z notebooku",
+        }
+        rows = [{"model": label, **report[key]} for key, label in names.items() if key in report]
+        table = pd.DataFrame(rows).drop(columns="opatrenia_podiel")
+        st.caption(f"Vyhodnotenie na zraniteľnostiach zverejnených od {report['testovacie_obdobie_od']}.")
+        st.dataframe(table.round(3), hide_index=True, width="stretch")
+
+
+@st.fragment(run_every="20s")
+def live_tab():
+    status = prevadzka.read_status()
+    if not status or "last_attempt" not in status:
+        st.info("Prevádzka zatiaľ nebežala. Spustite ju príkazom docker compose up -d.")
+        return
+
+    records = prevadzka.read_records()
+    last_success = status.get("last_success", "")
+    interval = int(status.get("poll_seconds", prevadzka.POLL_SECONDS))
+    silent = not last_success or (
+        pd.Timestamp.now("UTC") - pd.Timestamp(last_success, tz="UTC")
+    ).total_seconds() > 2 * interval + 300
+
+    if status.get("last_error"):
+        st.warning(f"Posledné načítanie z NVD zlyhalo, prevádzka to skúsi znova. {status['last_error']}")
+    elif silent:
+        st.warning("Prevádzka sa dlhšie neozvala. Skontrolujte kontajner príkazom docker compose logs worker.")
+
+    published = pd.to_datetime(records["published"], utc=True) if len(records) else pd.Series(dtype="datetime64[ns, UTC]")
+    last_day = int((published >= pd.Timestamp.now("UTC") - pd.Timedelta(hours=24)).sum())
+    first, second, third = st.columns(3)
+    first.metric("Posledné úspešné načítanie", utc_label(last_success))
+    second.metric("Zverejnené za 24 hodín", f"{last_day:,}".replace(",", " "))
+    third.metric("Spracované spolu", f"{len(records):,}".replace(",", " "))
+    st.caption(f"NVD sa kontroluje každých {decimal(interval / 60, 0)} min. Stránka sa obnovuje sama. Model: {status.get('model', '')}.")
+
+    if records.empty:
+        st.info("Zatiaľ nie sú spracované žiadne zraniteľnosti.")
+        return
+
+    columns = st.columns(len(op.ACTION_NAMES))
+    for column, action in zip(columns, op.ACTION_NAMES):
+        count = int((records["action"] == action).sum())
+        column.metric(action, f"{count:,}".replace(",", " "), percent(count / len(records)), delta_color="off", delta_arrow="off")
+
+    scored = records[records["actual_severity"].isin(op.LABELS)]
+    if len(scored):
+        critical = scored[scored["actual_severity"] == "CRITICAL"]
+        recall = (critical["predicted_class"] == "CRITICAL").mean() if len(critical) else None
+        st.markdown(
+            f"**Kontrola presnosti:** z {len(scored):,} záznamov, ktoré už majú skóre CVSS, model určil správnu triedu pri "
+            f"{percent((scored['predicted_class'] == scored['actual_severity']).mean())}".replace(",", " ", 1)
+            + (f" a zachytil {percent(recall)} kritických." if recall is not None else ".")
+        )
+
+    actions = st.multiselect("Opatrenie", op.ACTION_NAMES, placeholder="Všetky", key="live_actions")
+    shown = records[records["action"].isin(actions)] if actions else records
+    st.dataframe(
+        shown.head(500),
+        hide_index=True,
+        width="stretch",
+        height=420,
+        column_order=[
+            "published", "cve_id", "action", "predicted_class", "actual_severity",
+            "p_critical", "expected_risk", "cwe_text", "description",
+        ],
+        column_config={
+            "published": "zverejnené (UTC)",
+            "cve_id": "CVE-ID",
+            "action": "opatrenie",
+            "predicted_class": "predikcia",
+            "actual_severity": "skutočná závažnosť",
+            "p_critical": st.column_config.NumberColumn("P(CRITICAL)", format="%.2f"),
+            "expected_risk": st.column_config.NumberColumn("denná škoda (€)", format="%.2f"),
+            "cwe_text": "CWE",
+            "description": st.column_config.TextColumn("popis", width="large"),
+        },
+    )
+    show_model_report()
+
+
 def assumptions_tab():
     st.warning(
         "Dataset neobsahuje náklady, časy ani skutočné zneužitia. Hodnoty nižšie sú predpoklady pre "
@@ -297,17 +398,19 @@ def assumptions_tab():
 st.title("Opatrenia pre zraniteľnosti")
 st.write("Pridajte zraniteľnosť a model odhadne jej závažnosť a odporučí opatrenie podľa rizika, nákladov a času.")
 
-if not op.MODEL_PATH.exists() and not op.DATA_PATH.exists():
+if not op.active_model_path().exists() and not op.DATA_PATH.exists():
     st.error("Chýbajú vyčistené dáta. Najprv spustite notebook priprava_dat.ipynb.")
     st.stop()
 
-bundle = get_bundle()
+bundle = active_bundle()
 
-tab_new, tab_records, tab_overview, tab_assumptions = st.tabs(
-    ["Nový záznam", "Pridané záznamy", "Výsledky na testovacích dátach", "Predpoklady"]
+tab_new, tab_live, tab_records, tab_overview, tab_assumptions = st.tabs(
+    ["Nový záznam", "Živá prevádzka", "Pridané záznamy", "Výsledky na testovacích dátach", "Predpoklady"]
 )
 with tab_new:
     new_record_tab(bundle)
+with tab_live:
+    live_tab()
 with tab_records:
     records_tab()
 with tab_overview:

@@ -1,11 +1,32 @@
+x-common: &common
+  build: .
+  image: opatrenia-zranitelnosti
+  volumes:
+    # Dáta a modely zostávajú na disku mimo kontajnera
+    - ./data:/app/data
+    # Databáza prevádzky je vo volume Dockeru, kde spoľahlivo funguje zamykanie SQLite
+    - runtime:/app/runtime
+  restart: unless-stopped
+
 services:
   app:
-    build: .
-    image: opatrenia-zranitelnosti
+    <<: *common
     container_name: opatrenia-zranitelnosti
+    environment:
+      PREVADZKA_DB: /app/runtime/prevadzka.db
     ports:
       - "127.0.0.1:8501:8501"
-    volumes:
-      # Dáta, model a pridané záznamy zostávajú na disku mimo kontajnera
-      - ./data:/app/data
-    restart: unless-stopped
+
+  worker:
+    <<: *common
+    container_name: opatrenia-prevadzka
+    command: ["python", "prevadzka.py"]
+    environment:
+      PREVADZKA_DB: /app/runtime/prevadzka.db
+      POLL_SECONDS: "900"
+      NVD_API_KEY: ${NVD_API_KEY:-}
+    healthcheck:
+      disable: true
+
+volumes:
+  runtime:

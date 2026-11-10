@@ -21,6 +21,8 @@ from sklearn.linear_model import LogisticRegression
 ROOT = Path(__file__).parent
 DATA_PATH = ROOT / "data" / "processed" / "cve_clean.csv"
 MODEL_PATH = ROOT / "data" / "processed" / "model_opatrenia.joblib"
+PRODUCTION_MODEL_PATH = ROOT / "data" / "processed" / "model_produkcia.joblib"
+PRODUCTION_REPORT_PATH = ROOT / "data" / "processed" / "model_produkcia_report.json"
 RECORDS_PATH = ROOT / "data" / "processed" / "pridane_zaznamy.csv"
 TEST_RESULTS_PATH = ROOT / "data" / "processed" / "odporucania_opatreni.csv"
 FIGURES_DIR = ROOT / "figures"
@@ -162,12 +164,8 @@ def _log_probabilities(model, X):
     return np.log(np.clip(model.predict_proba(X), 1e-6, 1))
 
 
-def train_and_save(path=MODEL_PATH):
-    """Naučí LightGBM na dátach do roku 2018 a kalibruje ho na roku 2019."""
-    data = _load_modeling_data()
-    train = data[data["year"] <= 2018]
-    calibration = data[data["year"] == 2019]
-
+def fit_bundle(train, calibration, n_jobs=4):
+    """Naučí model na tréningových dátach a kalibruje ho na kalibračných."""
     features = _make_features()
     X_train = _to_float32(features.fit_transform(train))
     X_calibration = _to_float32(features.transform(calibration))
@@ -185,7 +183,7 @@ def train_and_save(path=MODEL_PATH):
         random_state=SEED,
         deterministic=True,
         force_row_wise=True,
-        n_jobs=4,
+        n_jobs=n_jobs,
         verbosity=-1,
     )
     model.fit(X_train, train["target"].to_numpy())
@@ -193,14 +191,37 @@ def train_and_save(path=MODEL_PATH):
     calibrator = LogisticRegression(C=1e4, max_iter=5000)
     calibrator.fit(_log_probabilities(model, X_calibration), calibration["target"].to_numpy())
 
-    bundle = {"features": features, "model": model, "calibrator": calibrator}
+    return {"features": features, "model": model, "calibrator": calibrator}
+
+
+def save_bundle(bundle, path):
+    """Uloží model naraz, aby bežiace procesy nikdy nenačítali rozpísaný súbor."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, path)
+    partial = path.with_suffix(".part")
+    joblib.dump(bundle, partial)
+    partial.replace(path)
+
+
+def train_and_save(path=MODEL_PATH):
+    """Naučí LightGBM na dátach do roku 2018 a kalibruje ho na roku 2019."""
+    data = _load_modeling_data()
+    bundle = fit_bundle(data[data["year"] <= 2018], data[data["year"] == 2019])
+    save_bundle(bundle, path)
     return bundle
 
 
 def load_or_train(path=MODEL_PATH):
     return joblib.load(path) if path.exists() else train_and_save(path)
+
+
+def active_model_path():
+    """Prevádzkový model má prednosť pred modelom z notebooku."""
+    return PRODUCTION_MODEL_PATH if PRODUCTION_MODEL_PATH.exists() else MODEL_PATH
+
+
+def load_active():
+    path = active_model_path()
+    return load_or_train(path) if path == MODEL_PATH else joblib.load(path)
 
 
 def predict_probabilities(bundle, frame):
