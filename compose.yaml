@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    image: opatrenia-zranitelnosti
+    container_name: opatrenia-zranitelnosti
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      # Dáta, model a pridané záznamy zostávajú na disku mimo kontajnera
+      - ./data:/app/data
+    restart: unless-stopped
