@@ -1,0 +1,6 @@
+# Dataset sa do gitu neukladá, odkaz je v README.md
+data/
+
+.venv/
+__pycache__/
+.ipynb_checkpoints/
