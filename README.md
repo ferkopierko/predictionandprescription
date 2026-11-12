@@ -2,37 +2,28 @@
 
 ## Dataset
 
-**CVE and CWE Mapping Dataset (2021)**, súbor `Global_Dataset.csv`, 169 566 záznamov, 56 MB.
+**VERIS Community Database (VCDB)**, 10 047 verejne známych bezpečnostných incidentov zapísaných v štandarde VERIS.
 
-- Odkaz: <https://huggingface.co/datasets/zefang-liu/cve-and-cwe-mapping-dataset>
-- Pôvodný zdroj: <https://www.kaggle.com/datasets/krooz0/cve-and-cwe-mapping-dataset>
-- Licencia: [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/), autor Kirushikesh DB
+- Odkaz: <https://github.com/vz-risk/VCDB>, verzia pripnutá na commit `5ebf2f5` z 10. 11. 2026
+- Licencia: [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/), autor Verizon RISK Team a prispievatelia VCDB
 
-Samotné dáta nie sú v repozitári. `main.py` ich stiahne do `data/raw/` a overí ich kontrolný súčet.
+Každý incident opisuje celý model hrozby: kto útočil (actor), akým spôsobom (action), na aké aktívum (asset) a čo narušil (attribute). Pri úniku dát uvádza aj počet uniknutých záznamov. Preto sa z neho dá odhadnúť pravdepodobnosť aj dopad scenára hrozby.
 
-| Stĺpec | Význam |
-| --- | --- |
-| `ID` | poradové číslo riadku |
-| `CVE-ID` | identifikátor zraniteľnosti |
-| `CVSS-V3` | skóre závažnosti CVSS v3 |
-| `CVSS-V2` | skóre závažnosti CVSS v2 |
-| `SEVERITY` | kategória závažnosti |
-| `DESCRIPTION` | textový popis zraniteľnosti |
-| `CWE-ID` | typ slabiny podľa CWE |
+Samotné dáta nie sú v repozitári. `vcdb_data.py` ich stiahne do `data/raw/vcdb/` a overí ich kontrolný súčet.
 
 ## Príprava dát
 
-Kód aj dokumentácia čistenia, analýzy a vizualizácií sú v notebooku [priprava_dat.ipynb](priprava_dat.ipynb). Grafy sú v priečinku [figures/](figures/).
+Notebook [priprava_dat.ipynb](priprava_dat.ipynb) dáta vyčistí, rozbalí do tabuľky podľa modelu hrozby, analyzuje ich a vytvorí 2 vizualizácie. Priradí incidentom vzor útoku a vzorom opatrenia CIS Controls v8. Grafy sú v priečinku [figures/](figures/).
 
 ## Predikčná analýza
 
-Implementácia a porovnanie logistickej regresie a LightGBM sú v notebooku [predikcia.ipynb](predikcia.ipynb). Modely odhadujú závažnosť zraniteľnosti z jej popisu a typu CWE.
+Notebook [predikcia.ipynb](predikcia.ipynb) porovnáva logistickú regresiu a LightGBM pri odhade dopadu incidentu (`nízky`, `stredný`, `vysoký`) z informácií známych hneď po jeho odhalení. Incidenty z rovnakého zdroja sú vždy v tej istej časti dát. Model sa ukladá do `data/processed/model_dopad_vcdb.joblib` a príprava jeho znakov je v `vcdb_model.py`.
 
-Notebook [predikcia_70_30.ipynb](predikcia_70_30.ipynb) rieši zjednodušenú úlohu so zlúčenými triedami `LOW` a `MEDIUM` a náhodným rozdelením dát 70:30 so seedom 67.
+Notebook [predikcia_70_30.ipynb](predikcia_70_30.ipynb) rieši zjednodušenú úlohu so zlúčenými triedami `nízky` a `stredný` a náhodným rozdelením dát 70:30 so seedom 67.
 
-## Preskriptívna údržba
+## Preskriptívna analýza
 
-Notebook [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) z predikcie závažnosti odvodzuje jedno zo 4 opatrení: monitorovanie, plánovanú opravu, dočasnú ochranu s prioritnou opravou alebo núdzovú opravu. Rozhodnutie zohľadňuje riziko, náklady, čas a prioritu. Náklady a pravdepodobnosti zneužitia sú predpoklady uvedené v notebooku, lebo dataset ich neobsahuje.
+Notebook [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) pre 48 scenárov rizika (6 odvetví × 8 vzorov útokov) vyberá jedno zo 4 opatrení: akceptovať a monitorovať, prevencia, detekcia a reakcia, alebo komplexná ochrana. Rozhodnutie zohľadňuje riziko, náklady, čas zavedenia a prioritu. Ceny a účinnosť opatrení sú predpoklady uvedené v notebooku, lebo dataset ich neobsahuje.
 
 ## Spustenie
 
@@ -46,7 +37,7 @@ jupyter nbconvert --to notebook --execute --inplace predikcia_70_30.ipynb
 jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
 ```
 
-Vyčistené dáta sa uložia do `data/processed/cve_clean.csv`. Ostatné notebooky ich používajú, preto musí `priprava_dat.ipynb` bežať ako prvý.
+Notebooky treba spúšťať v tomto poradí, lebo každý používa výstupy predchádzajúceho.
 
 ## Aplikácia
 
@@ -54,8 +45,6 @@ Vyčistené dáta sa uložia do `data/processed/cve_clean.csv`. Ostatné noteboo
 docker compose up -d --build
 ```
 
-Príkaz `docker compose down` aplikáciu zastaví. Priečinok `data/` je do kontajnera pripojený zvonka, preto v ňom musia byť výstupy notebookov `priprava_dat.ipynb` a `preskriptivna_udrzba.ipynb`.
+Aplikácia beží na <http://localhost:8501> a príkaz `docker compose down` ju zastaví. Bez Dockera sa spustí príkazom `streamlit run app.py`.
 
-Bez Dockera sa aplikácia spustí príkazom `streamlit run app.py`.
-
-Aplikácia beží na <http://localhost:8501>. Umožňuje pridať zraniteľnosť, zobraziť jej predikovanú závažnosť a odporúčané opatrenie a prezerať výsledky z notebooku. Pri prvom spustení sa model naučí a uloží do `data/processed/`, čo trvá približne 1 až 3 minúty. Pridané záznamy sa ukladajú do `data/processed/pridane_zaznamy.csv`.
+Aplikácia zatiaľ používa **pôvodný model nad datasetom CVE** z predchádzajúcej verzie projektu a potrebuje jeho dáta v `data/processed/cve_clean.csv`. Na model VCDB ešte nie je prepojená.
