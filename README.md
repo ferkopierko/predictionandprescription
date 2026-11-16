@@ -1,5 +1,7 @@
 # Threat Modeling and Risk Assessment
 
+Podrobný opis riešenia je v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
+
 ## Dataset
 
 **VERIS Community Database (VCDB)**, 10 047 verejne známych bezpečnostných incidentov zapísaných v štandarde VERIS.
