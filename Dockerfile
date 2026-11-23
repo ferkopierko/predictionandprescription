@@ -12,14 +12,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py opatrenia.py nvd.py prevadzka.py trenovanie.py ./
+# vcdb_model.py je potrebný na načítanie uloženého modelu
+COPY app.py api.py opatrenia.py preklady.py vcdb_model.py ./
+COPY .streamlit ./.streamlit
+COPY static ./static
 COPY figures ./figures
 
 RUN mkdir runtime && chown app:app runtime
 
 USER app
 
-EXPOSE 8501
+EXPOSE 8501 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4)"]

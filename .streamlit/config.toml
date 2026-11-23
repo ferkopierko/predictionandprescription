@@ -1,0 +1,96 @@
+# Vzhľad aplikácie. Svetlý a tmavý režim sa prepína podľa nastavenia prehliadača.
+
+[client]
+toolbarMode = "minimal"
+showErrorDetails = "none"
+
+[browser]
+gatherUsageStats = false
+
+[server]
+# Písma sú v priečinku static/fonts, aby aplikácia vyzerala rovnako aj bez internetu
+enableStaticServing = true
+
+[theme]
+font = "IBM Plex Sans, Segoe UI, Helvetica, Arial, sans-serif"
+codeFont = "IBM Plex Mono, Menlo, Consolas, monospace"
+baseFontSize = 15
+baseRadius = "10px"
+buttonRadius = "8px"
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+showWidgetBorder = true
+chartCategoricalColors = ["#4A6EEB", "#8B5CF6", "#14A3A1", "#94A3B8", "#2E9E6A", "#E09A1F", "#D9463E"]
+
+# Lokálne písma IBM Plex (licencia SIL OFL, static/fonts/OFL.txt)
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Regular.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Italic.woff2"
+weight = 400
+style = "italic"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Medium.woff2"
+weight = 500
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-SemiBold.woff2"
+weight = 600
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Sans"
+url = "app/static/fonts/IBMPlexSans-Bold.woff2"
+weight = 700
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-Regular.woff2"
+weight = 400
+style = "normal"
+
+[[theme.fontFaces]]
+family = "IBM Plex Mono"
+url = "app/static/fonts/IBMPlexMono-Medium.woff2"
+weight = 500
+style = "normal"
+
+[theme.light]
+primaryColor = "#2F5BEA"
+backgroundColor = "#F6F7FB"
+secondaryBackgroundColor = "#ECEFF5"
+textColor = "#18202F"
+borderColor = "#D9DFE9"
+dataframeBorderColor = "#E3E7EF"
+dataframeHeaderBackgroundColor = "#EEF1F7"
+linkColor = "#2F5BEA"
+greenColor = "#2E9E6A"
+orangeColor = "#E09A1F"
+redColor = "#D9463E"
+blueColor = "#2F5BEA"
+violetColor = "#8B5CF6"
+
+[theme.dark]
+primaryColor = "#6E8EF7"
+backgroundColor = "#0F141C"
+secondaryBackgroundColor = "#1A212C"
+textColor = "#E6E9EF"
+borderColor = "#2B3543"
+dataframeBorderColor = "#263040"
+dataframeHeaderBackgroundColor = "#1A212C"
+linkColor = "#8FA8FA"
+greenColor = "#3FB97F"
+orangeColor = "#EDAA36"
+redColor = "#E8625B"
+blueColor = "#6E8EF7"
+violetColor = "#A585F8"

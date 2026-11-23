@@ -29,6 +29,25 @@ Notebook [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) pre 48 scenár
 
 ## Spustenie
 
+Potrebný je Python 3.11 alebo novší (projekt je odskúšaný s 3.13).
+
+**macOS**
+
+```bash
+brew install python@3.13 libomp   # ak chýba novší Python alebo OpenMP pre LightGBM
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+jupyter nbconvert --to notebook --execute --inplace priprava_dat.ipynb
+jupyter nbconvert --to notebook --execute --inplace predikcia.ipynb
+jupyter nbconvert --to notebook --execute --inplace predikcia_70_30.ipynb
+jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
+```
+
+Systémový `python3` na macOS je často iba 3.9, preto treba vytvoriť prostredie príkazom `python3.13`. LightGBM na Macu potrebuje knižnicu OpenMP (`libomp`), bez nej notebook `predikcia.ipynb` zlyhá s chybou `Library not loaded: libomp.dylib`.
+
+**Windows (PowerShell)**
+
 ```powershell
 python -m venv .venv
 .venv\Scripts\Activate.ps1
@@ -39,14 +58,54 @@ jupyter nbconvert --to notebook --execute --inplace predikcia_70_30.ipynb
 jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
 ```
 
-Notebooky treba spúšťať v tomto poradí, lebo každý používa výstupy predchádzajúceho.
+Notebooky treba spúšťať v tomto poradí, lebo každý používa výstupy predchádzajúceho. Pri spustení sa prekreslia aj grafy vo `figures/`, príkaz `git restore figures/` ich vráti do verzie z gitu.
 
 ## Aplikácia
+
+Aplikácia hodnotí jednotlivé incidenty modelom VCDB z `data/processed/model_dopad_vcdb.joblib`. Pred spustením musia existovať výstupy notebookov v `data/processed/` (stačí spustiť `priprava_dat.ipynb`, `predikcia.ipynb` a `preskriptivna_udrzba.ipynb`).
 
 ```powershell
 docker compose up -d --build
 ```
 
-Aplikácia beží na <http://localhost:8501> a príkaz `docker compose down` ju zastaví. Bez Dockera sa spustí príkazom `streamlit run app.py`.
+| Služba | Adresa | Obsah |
+| --- | --- | --- |
+| `app` | <http://localhost:8501> | Webová aplikácia Streamlit |
+| `api` | <http://localhost:8000/docs> | REST API (FastAPI) s interaktívnou dokumentáciou |
 
-Aplikácia zatiaľ používa **pôvodný model nad datasetom CVE** z predchádzajúcej verzie projektu a potrebuje jeho dáta v `data/processed/cve_clean.csv`. Na model VCDB ešte nie je prepojená.
+Obe služby používajú rovnaký modul `opatrenia.py` a rovnakú databázu SQLite (tabuľka `hodnotenia`) vo volume Dockeru. Príkaz `docker compose down` ich zastaví.
+
+Bez Dockera:
+
+```bash
+streamlit run app.py
+uvicorn api:app --port 8000
+```
+
+Databáza je vtedy v `data/processed/hodnotenia.db`, iné umiestnenie sa dá nastaviť premennou `HODNOTENIA_DB`.
+
+**Záložky aplikácie**
+
+- **Nové hodnotenie:** formulár incidentu (odvetvie, veľkosť, krajina, cielenosť, typ aktéra a útoku, podrobné hodnoty, narušená integrita a dostupnosť). Ponúka iba hodnoty, ktoré sa v dátach vyskytujú aspoň 5-krát. Výsledkom sú pravdepodobnosti dopadu, očakávaná ročná strata a odporúčané opatrenie s opatreniami CIS. Tlačidlo **Náhodný testovací incident** vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad.
+- **Uložené hodnotenia:** záznamy z databázy zoradené podľa očakávanej straty, s možnosťou vymazania.
+- **Prehľad:** interaktívne grafy z uložených hodnotení: počet hodnotení v čase podľa dopadu, kumulatívna očakávaná strata, odporúčané opatrenia a najčastejšie vzory útokov. Obnovujú sa každých 5 sekúnd, takže zahŕňajú aj hodnotenia z API.
+- **Register rizík:** 48 scenárov z notebooku, interaktívna mapa rizík, krivka rozpočtu s posuvníkom ročného rozpočtu a porovnanie stratégií. Grafy sa počítajú z dát rovnako ako grafy 7 až 9 v notebooku.
+- **Predpoklady:** straty, ceny a účinnosť opatrení a prahy, od ktorých sa opatrenie oplatí.
+
+**REST API**
+
+| Metóda | Cesta | Popis |
+| --- | --- | --- |
+| GET | `/api/moznosti` | povolené hodnoty polí incidentu |
+| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy |
+| GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
+| GET | `/api/register` | register rizík z preskriptívnej analýzy |
+
+Príklad z PowerShellu (dá sa vyskúšať aj priamo na <http://localhost:8000/docs> cez *Try it out*):
+
+```powershell
+$telo = @{ odvetvie = "Informácie"; aktor_typy = @("external"); akcia_typy = @("hacking"); akcia_vektory = @("hacking:Web application") } | ConvertTo-Json
+Invoke-RestMethod -Method Post http://localhost:8000/api/hodnotenie -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($telo))
+```
+
+Príkaz `python opatrenia.py` overí, že vstup z formulára dáva pre testovacie incidenty rovnaké pravdepodobnosti ako predikcia nad pôvodným riadkom z `vcdb_clean.csv`.
