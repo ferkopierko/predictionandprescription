@@ -543,20 +543,45 @@ def impact_timeline_chart(timeline):
     return finish(area.properties(height=300))
 
 
-def loss_timeline_chart(timeline):
-    """Kumulatívna očakávaná ročná strata uložených hodnotení v čase."""
-    frame = _padded(timeline, ["strata spolu (€)", "počet spolu"])
-    frame["text"] = frame["strata spolu (€)"].map(euro)
-    frame["čas text"] = frame["čas"].dt.strftime("%-d. %-m. %Y %H:%M")
-    x = alt.X("čas:T", title=None, axis=_time_axis(timeline["čas"]))
-    y = alt.Y("strata spolu (€):Q", title="Očakávaná ročná strata spolu (€)", axis=alt.Axis(format=",.0f", tickCount=5))
-    area = alt.Chart(frame).mark_area(interpolate="step-after", color=COST_COLOR, opacity=0.18).encode(x=x, y=y)
-    line = alt.Chart(frame).mark_line(interpolate="step-after", color=COST_COLOR, strokeWidth=2.5).encode(x=x, y=y)
-    points = alt.Chart(frame.iloc[1:-1]).mark_circle(size=60, color=COST_COLOR).encode(
-        x=x, y=y, tooltip=[alt.Tooltip("čas text:N", title="čas"), alt.Tooltip("počet spolu:Q", title="hodnotení"),
-                           alt.Tooltip("text:N", title="strata spolu")],
+REDUCTION_COLOR = IMPACT_COLORS["nízky"]
+
+
+def loss_by_sector_chart(records):
+    """Očakávaná ročná strata podľa odvetvia pred opatrením a po ňom.
+
+    Celý stĺpec je strata pred opatrením, sivá časť strata, ktorá po odporúčanom opatrení zostane,
+    zelená časť strata, ktorú opatrenie odstráni.
+    """
+    sectors = (records.groupby("odvetvie")
+               .agg(hodnotenia=("id", "size"), pred=("ocakavana_strata", "sum"), po=("zostavajuca_strata", "sum"),
+                    cena=("cena_opatrenia", "sum"))
+               .sort_values("pred", ascending=False).reset_index())
+    sectors["zníženie"] = sectors["pred"] - sectors["po"]
+    sectors["pred text"] = sectors["pred"].map(euro)
+    sectors["po text"] = sectors["po"].map(euro)
+    sectors["zníženie text"] = sectors["zníženie"].map(euro) + " (" + (sectors["zníženie"] / sectors["pred"].where(
+        sectors["pred"] > 0, 1)).map(percent) + ")"
+    sectors["cena text"] = sectors["cena"].map(euro)
+    sectors["text"] = sectors["pred text"] + " → " + sectors["po text"]
+    parts = ["po opatrení zostane", "opatrenie odstráni"]
+    frame = sectors.melt(id_vars=[column for column in sectors.columns if column not in ("po", "zníženie")],
+                         value_vars=["po", "zníženie"], var_name="časť", value_name="hodnota")
+    frame["časť"] = frame["časť"].map({"po": parts[0], "zníženie": parts[1]})
+    frame["poradie"] = frame["časť"].map({parts[0]: 0, parts[1]: 1})
+    order = list(sectors["odvetvie"])
+    y = alt.Y("odvetvie:N", sort=order, title=None, axis=alt.Axis(ticks=False, domain=False, labelLimit=220, labelPadding=8))
+    x = alt.X("hodnota:Q", stack="zero", title=None, axis=None, scale=alt.Scale(domain=[0, sectors["pred"].max() * 1.55]))
+    tooltip = [alt.Tooltip("odvetvie:N"), alt.Tooltip("hodnotenia:Q", title="hodnotení"),
+               alt.Tooltip("pred text:N", title="strata pred opatrením"), alt.Tooltip("po text:N", title="strata po opatrení"),
+               alt.Tooltip("zníženie text:N", title="zníženie"), alt.Tooltip("cena text:N", title="cena opatrení")]
+    bars = alt.Chart(frame).mark_bar(height=24).encode(
+        y=y, x=x, order=alt.Order("poradie:Q"), tooltip=tooltip,
+        color=alt.Color("časť:N", sort=parts, scale=alt.Scale(domain=parts, range=[RESIDUAL_COLOR, REDUCTION_COLOR]),
+                        legend=alt.Legend(orient="bottom", title=None, direction="horizontal")),
     )
-    return finish((area + line + points).properties(height=300))
+    labels = alt.Chart(sectors).mark_text(align="left", dx=6, fontSize=13, fontWeight=600, color=LABEL_COLOR).encode(
+        y=y, x=alt.X("pred:Q", scale=alt.Scale(domain=[0, sectors["pred"].max() * 1.55])), text="text:N", tooltip=tooltip)
+    return finish((bars + labels).properties(height=max(44 * len(sectors), 90)))
 
 
 def options_chart(records):
@@ -814,13 +839,16 @@ def records_tab():
         "p_nizky": percent, "p_stredny": percent, "p_vysoky": percent,
         "frekvencia": lambda value: decimal(value),
     })
+    columns = [
+        "priorita", "id", "nazov", "odvetvie", "vzor_utoku", "opatrenie", "ocakavana_strata",
+        "predikovany_dopad", "skutocny_dopad", "p_nizky", "p_stredny", "p_vysoky", "frekvencia",
+        "opatrenia_cis", "cena_opatrenia", "cisty_prinos", "zdroj", "vytvorene",
+    ]
+    if shown["nazov"].fillna("").str.strip().eq("").all():
+        columns.remove("nazov")
     st.dataframe(
         styled, hide_index=True, width="stretch",
-        column_order=[
-            "priorita", "id", "nazov", "odvetvie", "vzor_utoku", "opatrenie", "ocakavana_strata",
-            "predikovany_dopad", "skutocny_dopad", "p_nizky", "p_stredny", "p_vysoky", "frekvencia",
-            "opatrenia_cis", "cena_opatrenia", "cisty_prinos", "zdroj", "vytvorene",
-        ],
+        column_order=columns,
         column_config={
             "priorita": st.column_config.NumberColumn("Priorita", width="small"),
             "id": st.column_config.NumberColumn("Č.", width="small"),
@@ -878,8 +906,12 @@ def overview_tab():
     ]))
     st.html('<div class="rk-section">Počet hodnotení v čase podľa predikovaného dopadu</div>')
     st.altair_chart(impact_timeline_chart(timeline), width="stretch")
-    st.html('<div class="rk-section">Kumulatívna očakávaná ročná strata</div>')
-    st.altair_chart(loss_timeline_chart(timeline), width="stretch")
+    before, after = records["ocakavana_strata"].sum(), records["zostavajuca_strata"].sum()
+    st.html('<div class="rk-section">Očakávaná ročná strata pred opatrením a po ňom podľa odvetvia</div>'
+            f'<div class="rk-note">Spolu {esc(euro(before))} pred opatreniami a {esc(euro(after))} po odporúčaných '
+            f'opatreniach, teda o {esc(percent((before - after) / before) if before else "0 %")} menej. Ročná cena '
+            f'opatrení je {esc(euro(records["cena_opatrenia"].sum()))}.</div>')
+    st.altair_chart(loss_by_sector_chart(records), width="stretch")
     st.html('<div class="rk-section">Odporúčané opatrenia</div>')
     st.altair_chart(options_chart(records), width="stretch")
     st.html('<div class="rk-section">Najčastejšie vzory útokov</div>')
@@ -905,13 +937,14 @@ def register_tab():
             'prínosu na každé investované euro. Scenáre bez opatrenia nemajú prioritu.</div>')
     sectors = st.pills("Odvetvie", list(dict.fromkeys(register["odvetvie"])), selection_mode="multi",
                        label_visibility="collapsed")
-    shown = register[register["odvetvie"].isin(sectors)] if sectors else register
+    shown = (register[register["odvetvie"].isin(sectors)] if sectors else register).copy()
+    # Streamlit pri prázdnej číselnej bunke ignoruje formát a vypíše None, preto je priorita text
+    shown["priorita"] = shown["priorita"].map(lambda value: "–" if pd.isna(value) else f"{value:.0f}")
     money = {column: euro for column in ["očakávaná strata (€)", "cena opatrenia (€)", "zostávajúca strata (€)", "čistý prínos (€)"]}
     styled = shown.style.format({
         **money,
         "frekvencia za rok": lambda value: decimal(value),
         "P(vysoký dopad)": percent,
-        "priorita": lambda value: "–" if pd.isna(value) else f"{value:.0f}",
     })
     st.dataframe(
         styled, hide_index=True, width="stretch", height=420,
@@ -921,7 +954,8 @@ def register_tab():
             "odhad dopadu z", "incidenty v odhade",
         ],
         column_config={
-            "priorita": "Priorita", "odvetvie": "Odvetvie", "vzor_utoku": "Vzor útoku", "frekvencia za rok": "Frekvencia za rok",
+            "priorita": st.column_config.TextColumn("Priorita", width="small", alignment="right"),
+            "odvetvie": "Odvetvie", "vzor_utoku": "Vzor útoku", "frekvencia za rok": "Frekvencia za rok",
             "očakávaná strata (€)": "Očakávaná strata", "opatrenie": "Opatrenie", "opatrenia CIS": "Opatrenia CIS",
             "cena opatrenia (€)": "Cena opatrenia", "zostávajúca strata (€)": "Zostávajúca strata",
             "čistý prínos (€)": "Čistý prínos", "odhad dopadu z": "Odhad dopadu z", "incidenty v odhade": "Incidenty v odhade",
