@@ -1,8 +1,10 @@
 *
 !app.py
+!api.py
 !opatrenia.py
-!nvd.py
-!prevadzka.py
-!trenovanie.py
+!preklady.py
+!.streamlit/config.toml
+!static/
+!vcdb_model.py
 !requirements.txt
 !figures/

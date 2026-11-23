@@ -344,13 +344,42 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 | Súčasť | Súbor | Úloha |
 | --- | --- | --- |
 | Frontend | [app.py](app.py) | Webová aplikácia Streamlit na <http://localhost:8501> |
-| Logika modelu | [opatrenia.py](opatrenia.py) | Predikcia, výber opatrenia, uloženie záznamov |
-| Prevádzka | [prevadzka.py](prevadzka.py) | Pravidelne sťahuje nové CVE z NVD, vyhodnotí ich a uloží do SQLite |
-| Klient API | [nvd.py](nvd.py) | Komunikácia s NVD CVE API 2.0 |
-| Učenie | [trenovanie.py](trenovanie.py) | Stiahnutie dát a naučenie prevádzkového modelu |
-| Nasadenie | [Dockerfile](Dockerfile), [compose.yaml](compose.yaml) | Kontajnery `app` a `worker`, databáza SQLite vo volume |
+| API | [api.py](api.py) | REST API (FastAPI) na <http://localhost:8000>, dokumentácia na `/docs` |
+| Logika modelu | [opatrenia.py](opatrenia.py) | Prevod vstupu na znaky, predikcia dopadu, výber opatrenia, databáza |
+| Znaky modelu | [vcdb_model.py](vcdb_model.py) | Príprava znakov a kalibrované pravdepodobnosti, potrebné na načítanie modelu |
+| Databáza | SQLite, tabuľka `hodnotenia` | Uložené hodnotenia z aplikácie aj z API |
+| Nasadenie | [Dockerfile](Dockerfile), [compose.yaml](compose.yaml) | Kontajnery `app` a `api`, spoločná databáza vo volume Dockeru |
 
-**Stav:** aplikácia zatiaľ používa **pôvodný model nad datasetom CVE** z predchádzajúcej verzie projektu. Model VCDB (`data/processed/model_dopad_vcdb.joblib`) je pripravený na použitie mimo notebooku cez [vcdb_model.py](vcdb_model.py), no do aplikácie ešte nie je prepojený.
+### 6.1 Priebeh hodnotenia
+
+1. Analytik zadá incident tak, ako ho pozná hneď po odhalení: odvetvie, veľkosť organizácie, krajinu, cielenosť, typ aktéra a typ útoku, podrobné hodnoty (podrobný typ aktéra, spôsob a vektor útoku, aktívum, typ dát, motív, spôsob odhalenia) a či bola narušená integrita alebo dostupnosť. Formulár ponúka iba hodnoty, ktoré sa v `vcdb_clean.csv` vyskytujú aspoň 5-krát, lebo iné model nepozná.
+2. [opatrenia.py](opatrenia.py) prevedie vstup na riadok v tvare `vcdb_clean.csv`. Príznaky aktéra a akcie sa berú zo samostatného výberu typu aktéra a útoku, doplnené o typy, ktoré vyplývajú z podrobných hodnôt. Samostatný výber je nutný, lebo napríklad partner často nemá uvedený podrobný typ. Príznaky aktív a ransomvéru sa odvodia z podrobných hodnôt a vzor útoku rovnakými pravidlami ako v `priprava_dat.ipynb`.
+3. Uložený model LightGBM vráti kalibrované pravdepodobnosti tried dopadu (`calibrated_probabilities` z `vcdb_model.py`).
+4. Ročná frekvencia sa predvyplní podielom vzoru útoku v odvetví medzi reprezentatívnymi incidentmi (rovnako ako v notebooku) a analytik ju môže zmeniť.
+5. Opatrenie sa vyberie rovnakým výpočtom ako v [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb): rovnaké predpoklady, opatrenia CIS z `vcdb_opatrenia_cis.csv` a opatrenie s najnižšími celkovými nákladmi, iba pre jeden zadaný incident.
+6. Výsledok sa uloží do tabuľky `hodnotenia` v SQLite.
+
+**Overenie.** Príkaz `python opatrenia.py` prevedie 1 052 testovacích incidentov na vstup formulára a porovná pravdepodobnosti s predikciou modelu priamo nad pôvodným riadkom z `vcdb_clean.csv`. Najpravdepodobnejšia trieda aj vzor útoku sa zhodujú pri všetkých incidentoch, priemerný rozdiel pravdepodobnosti je 0,00003 a rozdiel nad 0,01 majú iba 2 incidenty (najviac 0,021), lebo obsahujú zriedkavé hodnoty, ktoré formulár neponúka. Bez samostatného výberu typu aktéra a útoku by sa líšilo 103 incidentov, najviac o 0,16. Výber opatrenia dáva pre všetkých 48 scenárov registra rovnaké opatrenie a stratu ako notebook.
+
+### 6.2 Frontend
+
+| Záložka | Obsah |
+| --- | --- |
+| Nové hodnotenie | formulár incidentu, pravdepodobnosti dopadu, očakávaná ročná strata, odporúčané opatrenie s opatreniami CIS a porovnanie všetkých 4 opatrení. Tlačidlo *Náhodný testovací incident* vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad. |
+| Uložené hodnotenia | záznamy z databázy zoradené podľa očakávanej straty, vstup hodnotenia, export do CSV, vymazanie |
+| Register rizík | 48 scenárov z `vcdb_register_rizik.csv` a grafy 7 až 9 |
+| Predpoklady | straty, ceny a účinnosť opatrení, ceny podľa vzoru útoku a prahy, od ktorých sa opatrenie oplatí |
+
+### 6.3 REST API
+
+| Metóda | Cesta | Popis |
+| --- | --- | --- |
+| GET | `/api/moznosti` | povolené hodnoty polí incidentu |
+| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy, pri neplatnom vstupe vráti 422 so zoznamom chýb |
+| GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
+| GET | `/api/register` | register rizík z preskriptívnej analýzy |
+
+Aplikácia aj API používajú rovnaký modul `opatrenia.py` a rovnakú databázu, takže hodnotenie pridané cez API sa hneď zobrazí v aplikácii.
 
 ## 7. Štruktúra projektu a spustenie
 
@@ -361,7 +390,8 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 ├── predikcia.ipynb              2. predikcia dopadu (3 triedy)
 ├── predikcia_70_30.ipynb        2b. predikcia dopadu (2 triedy, 70:30)
 ├── preskriptivna_udrzba.ipynb   3. preskripcia opatrení
-├── app.py, opatrenia.py, ...    aplikácia (zatiaľ nad CVE)
+├── opatrenia.py                 hodnotenie incidentu a databáza
+├── app.py, api.py               aplikácia Streamlit a REST API
 ├── figures/                     vizualizácie 1 až 9
 └── data/                        dáta a modely (mimo gitu)
 ```
@@ -376,7 +406,7 @@ jupyter nbconvert --to notebook --execute --inplace predikcia_70_30.ipynb
 jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
 ```
 
-Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predchádzajúceho. Aplikácia: `docker compose up -d --build`.
+Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predchádzajúceho. Aplikácia a API: `docker compose up -d --build`, podrobnosti v [README.md](README.md).
 
 ## 8. Splnenie požiadaviek zadania
 
@@ -385,9 +415,9 @@ Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predc
 | Príprava dát | dataset aspoň 1 000 záznamov, čistenie, analýza, 2 vizualizácie | 10 047 incidentov, 9 krokov čistenia, analýza v 5 častiach, vizualizácie 1 a 2 |
 | Prediktívna údržba | 2 ML algoritmy, porovnanie, metriky | logistická regresia a LightGBM, Macro F1, Accuracy, MAE, recall, precision, log loss, ROC AUC, bootstrap |
 | Preskriptívna údržba | aspoň 3 typy opatrení, aspoň 2 faktory, zdôvodnenie | 4 typy opatrení, 4 faktory (riziko, náklady, čas, priorita), prahy a zdôvodnenie |
-| Integrácia do IS | API, frontend, databáza | čiastočne: aplikácia existuje, no používa model CVE |
+| Integrácia do IS | API, frontend, databáza | REST API vo FastAPI, aplikácia Streamlit, databáza SQLite, všetko nad modelom VCDB a v Dockeri |
 | Dokumentácia | algoritmy, výsledky, rozhodovacia logika | tento dokument a [VYSVETLENIE.md](VYSVETLENIE.md) |
-| BPMN | diagram procesu | zatiaľ chýba |
+| BPMN | diagram procesu | splnené v rámci zadania č. 1 |
 
 ## 9. Obmedzenia
 

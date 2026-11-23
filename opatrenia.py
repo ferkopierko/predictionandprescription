@@ -1,352 +1,538 @@
-"""Predikcia závažnosti zraniteľnosti a výber opatrenia pre aplikáciu app.py.
+"""Hodnotenie jedného incidentu VCDB: predikcia dopadu, riziko a výber opatrenia.
 
-Model, kalibrácia a predpoklady zodpovedajú notebooku preskriptivna_udrzba.ipynb.
-Spustenie `python opatrenia.py` model naučí a uloží.
+Modul používa aplikácia app.py aj REST API api.py. Predpoklady, výpočet nákladov a výber
+opatrenia zodpovedajú notebooku preskriptivna_udrzba.ipynb, vzor útoku notebooku priprava_dat.ipynb.
+Spustenie `python opatrenia.py` overí, že vstup z formulára dáva rovnaké pravdepodobnosti
+ako riadok z vcdb_clean.csv.
 """
 
-import re
-import uuid
-from datetime import date, datetime, timedelta
+import json
+import os
+import sqlite3
+from contextlib import closing
+from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 
 import joblib
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from scipy import sparse
-from sklearn.compose import ColumnTransformer
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+
+from vcdb_model import CATEGORICAL, FLAGS, LABELS, MULTI, calibrated_probabilities
 
 ROOT = Path(__file__).parent
-DATA_PATH = ROOT / "data" / "processed" / "cve_clean.csv"
-MODEL_PATH = ROOT / "data" / "processed" / "model_opatrenia.joblib"
-PRODUCTION_MODEL_PATH = ROOT / "data" / "processed" / "model_produkcia.joblib"
-PRODUCTION_REPORT_PATH = ROOT / "data" / "processed" / "model_produkcia_report.json"
-RECORDS_PATH = ROOT / "data" / "processed" / "pridane_zaznamy.csv"
-TEST_RESULTS_PATH = ROOT / "data" / "processed" / "odporucania_opatreni.csv"
+PROCESSED = ROOT / "data" / "processed"
+CLEAN_PATH = PROCESSED / "vcdb_clean.csv"
+PREDICTIONS_PATH = PROCESSED / "vcdb_predikcie.csv"
+CONTROLS_PATH = PROCESSED / "vcdb_opatrenia_cis.csv"
+REGISTER_PATH = PROCESSED / "vcdb_register_rizik.csv"
+MODEL_PATH = PROCESSED / "model_dopad_vcdb.joblib"
 FIGURES_DIR = ROOT / "figures"
+DB_PATH = Path(os.environ.get("HODNOTENIA_DB", PROCESSED / "hodnotenia.db"))
 
-LABELS = ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
-SEED = 42
+REQUIRED_FILES = [CLEAN_PATH, PREDICTIONS_PATH, CONTROLS_PATH, REGISTER_PATH, MODEL_PATH]
 
-LEAKAGE_PATTERN = (
-    r"\bcvss(?:v?\d|:|\b)"
-    r"|base score"
-    r"|severity"
-    r"|\brated\s+(?:as\s+)?(?:critical|high|moderate|medium|low)\b"
-)
-
-HOURLY_RATE = 60
-PROTECTION_RESIDUAL = 0.3
-
-SEVERITY_ASSUMPTIONS = pd.DataFrame({
-    "škoda pri zneužití (€)": [1_000, 10_000, 50_000, 200_000],
-    "pravdepodobnosť zneužitia za 90 dní": [0.005, 0.01, 0.03, 0.08],
-}, index=LABELS)
-
-ACTION_NAMES = ["Monitorovanie", "Plánovaná oprava", "Dočasná ochrana", "Núdzová oprava"]
-ACTION_ASSUMPTIONS = pd.DataFrame({
-    "hodiny práce": [1, 4, 10, 16],
-    "dni do ochrany": [90, 30, 2, 3],
-    "dni do opravy": [90, 30, 14, 3],
-}, index=ACTION_NAMES)
-
-ACTION_STEPS = {
-    "Monitorovanie": "Sledovať výskyt a správy o zneužití. Opraviť pri bežnej údržbe.",
-    "Plánovaná oprava": "Zaradiť do mesačného cyklu záplat s bežným testovaním.",
-    "Dočasná ochrana": "Nasadiť dočasnú ochranu, potom vykonať prioritnú opravu.",
-    "Núdzová oprava": "Vykonať mimoriadnu zmenu mimo cyklu so zrýchleným testovaním a nasadením.",
+# Rovnaké hodnoty ako v priprava_dat.ipynb
+ACTORS = ["external", "internal", "partner", "unknown"]
+ACTIONS = ["hacking", "malware", "social", "error", "misuse", "physical", "environmental", "unknown"]
+ASSETS = {
+    "S": "server",
+    "U": "zariadenie_pouzivatela",
+    "M": "nosic_dat",
+    "P": "osoba",
+    "T": "terminal",
+    "N": "sietove_zariadenie",
 }
-
-COST = ACTION_ASSUMPTIONS["hodiny práce"].to_numpy(dtype=float) * HOURLY_RATE
-_protect = ACTION_ASSUMPTIONS["dni do ochrany"].to_numpy(dtype=float)
-_fix = ACTION_ASSUMPTIONS["dni do opravy"].to_numpy(dtype=float)
-EXPOSURE = _protect + (_fix - _protect) * PROTECTION_RESIDUAL
-DAILY_RISK = (
-    SEVERITY_ASSUMPTIONS["škoda pri zneužití (€)"].to_numpy(dtype=float)
-    * SEVERITY_ASSUMPTIONS["pravdepodobnosť zneužitia za 90 dní"].to_numpy(dtype=float)
-    / 90
-)
-
-CWE_NAMES = {
-    "CWE-20": "nesprávna validácia vstupu",
-    "CWE-22": "path traversal",
-    "CWE-78": "OS command injection",
-    "CWE-79": "cross-site scripting",
-    "CWE-89": "SQL injection",
-    "CWE-94": "code injection",
-    "CWE-119": "chyba v pamäti",
-    "CWE-125": "čítanie mimo hraníc",
-    "CWE-190": "pretečenie celého čísla",
-    "CWE-200": "únik informácií",
-    "CWE-269": "správa oprávnení",
-    "CWE-284": "riadenie prístupu",
-    "CWE-287": "nesprávne overenie",
-    "CWE-306": "chýbajúce overenie",
-    "CWE-352": "CSRF",
-    "CWE-400": "vyčerpanie prostriedkov",
-    "CWE-416": "use after free",
-    "CWE-434": "nahrávanie nebezpečných súborov",
-    "CWE-502": "deserializácia",
-    "CWE-787": "zápis mimo hraníc",
-    "CWE-798": "pevne zadané prihlasovacie údaje",
-    "CWE-862": "chýbajúca autorizácia",
-}
-
-CONTROLS = {
-    "CWE-79": "pravidlo WAF, prísna Content-Security-Policy",
-    "CWE-89": "pravidlo WAF, obmedzenie práv databázového účtu",
-    "CWE-20": "filtrovanie vstupov na proxy alebo WAF",
-    "CWE-22": "pravidlo WAF, obmedzenie práv k súborom",
-    "CWE-78": "izolácia služby, spustenie s minimálnymi právami",
-    "CWE-77": "izolácia služby, spustenie s minimálnymi právami",
-    "CWE-94": "izolácia služby, zákaz odchádzajúcich spojení",
-    "CWE-119": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-120": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-125": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-787": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-416": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-190": "obmedzenie sieťového prístupu, izolácia procesu",
-    "CWE-287": "prístup iba cez VPN, viacfaktorové overenie",
-    "CWE-306": "prístup iba cez VPN, viacfaktorové overenie",
-    "CWE-798": "zmena prihlasovacích údajov, prístup iba cez VPN",
-    "CWE-269": "obmedzenie účtov, sledovanie zmien oprávnení",
-    "CWE-284": "dočasné sprísnenie prístupových pravidiel",
-    "CWE-862": "dočasné sprísnenie prístupových pravidiel",
-    "CWE-863": "dočasné sprísnenie prístupových pravidiel",
-    "CWE-200": "obmedzenie prístupu k službe, sledovanie prístupov",
-    "CWE-352": "kontrola pôvodu požiadaviek na proxy, SameSite cookies",
-    "CWE-434": "dočasný zákaz nahrávania súborov",
-    "CWE-502": "obmedzenie sieťového prístupu k službe",
-    "CWE-400": "obmedzenie počtu požiadaviek",
-}
-
-RECORD_COLUMNS = [
-    "zaznam_id", "pridane", "cve_id", "description", "cwe_text",
-    *[f"P_{label}" for label in LABELS],
-    "ocakavane_denne_riziko", "opatrenie",
+PATTERNS = [
+    "Odopretie služby", "Strata a krádež aktív", "Chyby", "Zneužitie oprávnení",
+    "Sociálne inžinierstvo", "Útok na webovú aplikáciu", "Prienik do systému", "Ostatné",
 ]
 
+# Rovnaké predpoklady ako v preskriptivna_udrzba.ipynb
+INCIDENTS_PER_YEAR = 1.0
+HORIZON_YEARS = 3
+LOSS = pd.Series([25_000, 250_000, 2_500_000], index=LABELS, name="strata z incidentu (€)")
+CONTROL_COST = {"prevencia": 15_000, "detekcia": 25_000, "obnova": 20_000, "reakcia": 15_000}
+MONITORING_COST = 2_000
+OPTIONS = pd.DataFrame({
+    "menej incidentov": [0.0, 0.40, 0.0, 0.40],
+    "menšia strata": [0.0, 0.0, 0.35, 0.35],
+    "mesiace zavedenia": [0, 3, 2, 4],
+}, index=["Akceptovať a monitorovať", "Prevencia", "Detekcia a reakcia", "Komplexná ochrana"])
+OPTION_NAMES = list(OPTIONS.index)
 
-def _to_float32(matrix):
-    return sparse.csr_matrix(matrix, dtype=np.float32)
+# Hodnota musí byť v dátach aspoň 5-krát, inak ju model nepozná (CountVectorizer min_df=5)
+MIN_COUNT = 5
+MAJOR_COUNTRIES = ["US", "GB", "CA", "Unknown"]
+OTHER_COUNTRY = "iná"
+DETAIL_COLUMNS = ["aktor_variety", "akcia_variety", "akcia_vektory", "aktivum_variety", "typy_dat", "motiv", "sposob_odhalenia"]
+EMPTY_DEFAULT = {"motiv": "Unknown", "sposob_odhalenia": "unknown"}
+
+FIELD_NAMES = {
+    "odvetvie": "odvetvie",
+    "velkost_organizacie": "veľkosť organizácie",
+    "krajina": "krajina",
+    "cielenost": "cielenosť",
+    "aktor_typy": "typ aktéra",
+    "akcia_typy": "typ útoku",
+    "aktor_variety": "podrobný typ aktéra",
+    "akcia_variety": "podrobný spôsob útoku",
+    "akcia_vektory": "vektor útoku",
+    "aktivum_variety": "aktívum",
+    "typy_dat": "typ dát",
+    "motiv": "motív",
+    "sposob_odhalenia": "spôsob odhalenia",
+}
 
 
-def _make_features():
-    return ColumnTransformer([
-        ("text", TfidfVectorizer(
-            stop_words="english",
-            ngram_range=(1, 2),
-            min_df=5,
-            max_df=0.9,
-            max_features=30_000,
-            sublinear_tf=True,
-        ), "description"),
-        ("cwe", CountVectorizer(
-            lowercase=False,
-            token_pattern=r"CWE-\d+",
-            binary=True,
-        ), "cwe_text"),
-    ])
+def missing_files():
+    return [path for path in REQUIRED_FILES if not path.exists()]
 
 
-def _load_modeling_data():
-    scored = pd.read_csv(DATA_PATH).dropna(subset=["severity_v3"])
-    has_leakage = scored["description"].str.contains(LEAKAGE_PATTERN, case=False, regex=True)
-    data = scored[~has_leakage].reset_index(drop=True)
-    data["cwe_text"] = data["cwe_ids"].fillna("")
-    data["target"] = pd.Categorical(data["severity_v3"], categories=LABELS, ordered=True).codes
-    return data
+# ---------------------------------------------------------------- dáta a model
+
+@lru_cache(maxsize=1)
+def context():
+    """Načíta dáta, model a možnosti formulára. Výsledok sa načíta iba raz za beh procesu."""
+    clean = pd.read_csv(CLEAN_PATH, low_memory=False)
+    controls = pd.read_csv(CONTROLS_PATH)
+    representative = clean[clean["reprezentativny"]]
+    return {
+        "bundle": joblib.load(MODEL_PATH),
+        "clean": clean,
+        "controls": controls,
+        "share": pd.crosstab(representative["odvetvie"], representative["vzor_utoku"], normalize="index"),
+        "share_all": representative["vzor_utoku"].value_counts(normalize=True),
+        "choices": _choices(clean),
+    }
 
 
-def _log_probabilities(model, X):
-    return np.log(np.clip(model.predict_proba(X), 1e-6, 1))
+def _frequent(values):
+    counts = values.value_counts()
+    return sorted(counts[counts >= MIN_COUNT].index)
 
 
-def fit_bundle(train, calibration, n_jobs=4):
-    """Naučí model na tréningových dátach a kalibruje ho na kalibračných."""
-    features = _make_features()
-    X_train = _to_float32(features.fit_transform(train))
-    X_calibration = _to_float32(features.transform(calibration))
+def _frequent_tokens(column):
+    tokens = column.fillna("").str.split(";").explode()
+    return _frequent(tokens[tokens != ""])
 
-    model = lgb.LGBMClassifier(
-        objective="multiclass",
-        class_weight="balanced",
-        n_estimators=118,
-        learning_rate=0.1,
-        num_leaves=63,
-        min_child_samples=20,
-        colsample_bytree=0.3,
-        subsample=0.8,
-        subsample_freq=1,
-        random_state=SEED,
-        deterministic=True,
-        force_row_wise=True,
-        n_jobs=n_jobs,
-        verbosity=-1,
+
+def _choices(clean):
+    countries = [country for country in _frequent(clean["krajina"].fillna("Unknown")) if country not in MAJOR_COUNTRIES]
+    return {
+        "odvetvie": _frequent(clean["odvetvie"]),
+        "velkost_organizacie": ["malá", "veľká", "neznáma"],
+        "krajina": MAJOR_COUNTRIES + [OTHER_COUNTRY] + countries,
+        "cielenost": ["cielený", "príležitostný", "neznáma"],
+        "aktor_typy": ACTORS,
+        "akcia_typy": ACTIONS,
+        **{column: _frequent_tokens(clean[column]) for column in DETAIL_COLUMNS},
+    }
+
+
+def choices():
+    """Hodnoty, ktoré formulár a API ponúkajú pre jednotlivé polia."""
+    return context()["choices"]
+
+
+# ---------------------------------------------------------------- vstup
+
+def default_input():
+    return {
+        "odvetvie": "Neznáme",
+        "velkost_organizacie": "neznáma",
+        "krajina": "Unknown",
+        "cielenost": "neznáma",
+        "aktor_typy": [],
+        "akcia_typy": [],
+        **{column: [] for column in DETAIL_COLUMNS},
+        "atribut_integrity": False,
+        "atribut_availability": False,
+    }
+
+
+def validate(incident):
+    """Vráti zoznam chýb vo vstupe. Prázdny zoznam znamená platný vstup."""
+    options = choices()
+    errors = []
+    for field in ["odvetvie", "velkost_organizacie", "krajina", "cielenost"]:
+        if incident.get(field) not in options[field]:
+            errors.append(f"Pole {FIELD_NAMES[field]} má neznámu hodnotu {incident.get(field)!r}.")
+    for field in ["aktor_typy", "akcia_typy", *DETAIL_COLUMNS]:
+        unknown = sorted(set(incident.get(field) or []) - set(options[field]))
+        if unknown:
+            errors.append(f"Pole {FIELD_NAMES[field]} obsahuje hodnoty, ktoré model nepozná: {', '.join(unknown)}.")
+    if not actor_types(incident):
+        errors.append("Vyberte aspoň jeden typ aktéra (pri neznámom aktérovi unknown).")
+    if not action_types(incident):
+        errors.append("Vyberte aspoň jeden typ útoku (pri neznámom spôsobe unknown).")
+    return errors
+
+
+def _with_prefixes(selected, details, names):
+    """Typy vybrané priamo a typy, ktoré vyplývajú z podrobných hodnôt, napríklad external:Organized crime."""
+    implied = {value.split(":")[0] for value in details}
+    return [name for name in names if name in set(selected) | implied]
+
+
+def actor_types(incident):
+    return _with_prefixes(incident.get("aktor_typy") or [], incident.get("aktor_variety") or [], ACTORS)
+
+
+def action_types(incident):
+    return _with_prefixes(
+        incident.get("akcia_typy") or [],
+        [*(incident.get("akcia_variety") or []), *(incident.get("akcia_vektory") or [])],
+        ACTIONS,
     )
-    model.fit(X_train, train["target"].to_numpy())
-
-    calibrator = LogisticRegression(C=1e4, max_iter=5000)
-    calibrator.fit(_log_probabilities(model, X_calibration), calibration["target"].to_numpy())
-
-    return {"features": features, "model": model, "calibrator": calibrator}
 
 
-def save_bundle(bundle, path):
-    """Uloží model naraz, aby bežiace procesy nikdy nenačítali rozpísaný súbor."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".part")
-    joblib.dump(bundle, partial)
-    partial.replace(path)
+def attack_pattern(row):
+    """Vzor útoku, rovnaké pravidlá ako attack_pattern v priprava_dat.ipynb."""
+    varieties = set(row["akcia_variety"].split(";"))
+    vectors = set(row["akcia_vektory"].split(";"))
+    if "hacking:DoS" in varieties:
+        return "Odopretie služby"
+    if "physical:Theft" in varieties or "error:Loss" in varieties:
+        return "Strata a krádež aktív"
+    if row["akcia_error"]:
+        return "Chyby"
+    if row["akcia_misuse"]:
+        return "Zneužitie oprávnení"
+    if row["akcia_social"]:
+        return "Sociálne inžinierstvo"
+    if "hacking:Web application" in vectors and not row["akcia_malware"]:
+        return "Útok na webovú aplikáciu"
+    if row["akcia_hacking"] or row["akcia_malware"]:
+        return "Prienik do systému"
+    return "Ostatné"
 
 
-def train_and_save(path=MODEL_PATH):
-    """Naučí LightGBM na dátach do roku 2018 a kalibruje ho na roku 2019."""
-    data = _load_modeling_data()
-    bundle = fit_bundle(data[data["year"] <= 2018], data[data["year"] == 2019])
-    save_bundle(bundle, path)
-    return bundle
+def to_row(incident):
+    """Prevedie vstup formulára na riadok v tvare vcdb_clean.csv, ktorý očakáva model."""
+    def joined(field):
+        return ";".join(sorted(set(incident.get(field) or []))) or EMPTY_DEFAULT.get(field, "")
+
+    row = {column: joined(column) for column in DETAIL_COLUMNS}
+    country = incident.get("krajina") or "Unknown"
+    row.update({
+        "odvetvie": incident.get("odvetvie") or "Neznáme",
+        "velkost_organizacie": incident.get("velkost_organizacie") or "neznáma",
+        # Model rozlišuje iba US, GB, CA a Unknown, ostatné krajiny zlučuje (vcdb_model.prepare)
+        "krajina": country,
+        "cielenost": incident.get("cielenost") or "neznáma",
+    })
+    actors, actions = set(actor_types(incident)), set(action_types(incident))
+    asset_codes = {value.split(" - ")[0] for value in incident.get("aktivum_variety") or []}
+    row.update({f"aktor_{name}": name in actors for name in ACTORS})
+    row.update({f"akcia_{name}": name in actions for name in ACTIONS})
+    row.update({f"aktivum_{name}": code in asset_codes for code, name in ASSETS.items()})
+    row["atribut_integrity"] = bool(incident.get("atribut_integrity"))
+    row["atribut_availability"] = bool(incident.get("atribut_availability"))
+    row["ransomware"] = "malware:Ransomware" in (incident.get("akcia_variety") or [])
+    row["vzor_utoku"] = attack_pattern(row)
+    return row
 
 
-def load_or_train(path=MODEL_PATH):
-    return joblib.load(path) if path.exists() else train_and_save(path)
+def to_frame(incident):
+    columns = MULTI + [column for column in CATEGORICAL if column != "krajina_skupina"] + ["krajina"] + FLAGS
+    return pd.DataFrame([to_row(incident)])[columns]
 
 
-def active_model_path():
-    """Prevádzkový model má prednosť pred modelom z notebooku."""
-    return PRODUCTION_MODEL_PATH if PRODUCTION_MODEL_PATH.exists() else MODEL_PATH
+def from_clean_row(row):
+    """Prevedie riadok z vcdb_clean.csv na vstup formulára. Ponechá iba hodnoty, ktoré formulár ponúka."""
+    options = choices()
+
+    def details(column):
+        values = str(row[column]) if pd.notna(row[column]) else ""
+        return [value for value in values.split(";") if value in set(options[column])]
+
+    country = row["krajina"] if pd.notna(row["krajina"]) else "Unknown"
+    return {
+        "odvetvie": row["odvetvie"],
+        "velkost_organizacie": row["velkost_organizacie"],
+        "krajina": country if country in options["krajina"] else OTHER_COUNTRY,
+        "cielenost": row["cielenost"],
+        "aktor_typy": [name for name in ACTORS if bool(row[f"aktor_{name}"])],
+        "akcia_typy": [name for name in ACTIONS if bool(row[f"akcia_{name}"])],
+        **{column: details(column) for column in DETAIL_COLUMNS},
+        "atribut_integrity": bool(row["atribut_integrity"]),
+        "atribut_availability": bool(row["atribut_availability"]),
+    }
 
 
-def load_active():
-    path = active_model_path()
-    return load_or_train(path) if path == MODEL_PATH else joblib.load(path)
+# ---------------------------------------------------------------- testovacie incidenty
+
+@lru_cache(maxsize=1)
+def test_incidents():
+    """Testovacie incidenty z predikcia.ipynb spolu s ich riadkami z vcdb_clean.csv."""
+    predictions = pd.read_csv(PREDICTIONS_PATH, usecols=["zaznam_id"])
+    clean = context()["clean"]
+    return clean[clean["zaznam_id"].isin(predictions["zaznam_id"])].reset_index(drop=True)
 
 
-def predict_probabilities(bundle, frame):
-    """Vráti kalibrované pravdepodobnosti tried pre stĺpce description a cwe_text."""
-    X = _to_float32(bundle["features"].transform(frame))
-    return bundle["calibrator"].predict_proba(_log_probabilities(bundle["model"], X))
+def random_test_incident(seed=None):
+    """Náhodný testovací incident ako vstup formulára a jeho skutočný dopad."""
+    tests = test_incidents()
+    row = tests.iloc[int(np.random.default_rng(seed).integers(len(tests)))]
+    return {
+        "vstup": from_clean_row(row),
+        "zaznam_id": int(row["zaznam_id"]),
+        "skutocny_dopad": row["dopad"],
+        "pocet_zaznamov": int(row["pocet_zaznamov"]),
+        "rok": None if pd.isna(row["rok"]) else int(row["rok"]),
+        "popis": row["popis"] if pd.notna(row["popis"]) else "",
+    }
 
 
-def choose_actions(probabilities):
-    """Pre každý riadok vyberie opatrenie s najnižšími očakávanými nákladmi."""
-    expected_risk = probabilities @ DAILY_RISK
-    return (COST[None, :] + EXPOSURE[None, :] * expected_risk[:, None]).argmin(axis=1), expected_risk
+# ---------------------------------------------------------------- preskripcia
+
+def default_frequency(sector, pattern):
+    """Podiel vzoru v odvetví medzi reprezentatívnymi incidentmi krát počet incidentov za rok."""
+    ctx = context()
+    share = ctx["share"].loc[sector] if sector in ctx["share"].index else ctx["share_all"]
+    return INCIDENTS_PER_YEAR * float(share.get(pattern, 0.0))
+
+
+def option_controls(pattern):
+    """CIS opatrenia, ktoré patria k jednotlivým typom opatrení pre daný vzor útoku."""
+    controls = context()["controls"]
+    rows = controls[controls["vzor_utoku"] == pattern]
+    prevention = rows[rows["typ_opatrenia"] == "prevencia"]
+    response = rows[rows["typ_opatrenia"] != "prevencia"]
+    if 17 not in set(response["cis_cislo"]):
+        response = pd.concat([response, pd.DataFrame([{"cis_cislo": 17, "typ_opatrenia": "reakcia"}])])
+    return prevention, response
+
+
+def option_costs(pattern):
+    prevention, response = option_controls(pattern)
+    prevention_cost = prevention["typ_opatrenia"].map(CONTROL_COST).sum()
+    response_cost = response["typ_opatrenia"].map(CONTROL_COST).sum()
+    return np.array([MONITORING_COST, prevention_cost, response_cost, prevention_cost + response_cost], dtype=float)
+
+
+def control_list(pattern, option):
+    prevention, response = option_controls(pattern)
+    chosen = {"Akceptovať a monitorovať": [], "Prevencia": [prevention], "Detekcia a reakcia": [response],
+              "Komplexná ochrana": [prevention, response]}[option]
+    numbers = sorted({int(number) for frame in chosen for number in frame["cis_cislo"]})
+    return ", ".join(f"CIS {number}" for number in numbers) or "monitorovanie"
+
+
+def residual_share():
+    """Časť straty, ktorá po zavedení opatrenia zostane, s ohľadom na čas zavedenia v horizonte."""
+    effective = (12 * HORIZON_YEARS - OPTIONS["mesiace zavedenia"].to_numpy()) / (12 * HORIZON_YEARS)
+    return (1 - OPTIONS["menej incidentov"].to_numpy() * effective) * (1 - OPTIONS["menšia strata"].to_numpy() * effective)
+
+
+def expected_loss(distribution, frequency):
+    return INCIDENTS_PER_YEAR * frequency * float(np.asarray(distribution) @ LOSS.to_numpy())
+
+
+def total_costs(distribution, frequency, costs):
+    """Ročné celkové náklady každého opatrenia: cena plus strata, ktorá zostane."""
+    return costs + expected_loss(distribution, frequency) * residual_share()
+
+
+def predict(incident):
+    """Kalibrované pravdepodobnosti tried dopadu pre jeden incident."""
+    return calibrated_probabilities(context()["bundle"], to_frame(incident))[0]
+
+
+def assess(incident, frequency=None):
+    """Vyhodnotí jeden incident: dopad, riziko, opatrenie a porovnanie opatrení."""
+    row = to_row(incident)
+    pattern = row["vzor_utoku"]
+    default = default_frequency(row["odvetvie"], pattern)
+    frequency = default if frequency is None else float(frequency)
+    probabilities = predict(incident)
+
+    costs = option_costs(pattern)
+    totals = total_costs(probabilities, frequency, costs)
+    choice = int(totals.argmin())
+    option = OPTION_NAMES[choice]
+    comparison = [
+        {
+            "opatrenie": name,
+            "opatrenia_cis": control_list(pattern, name),
+            "cena": float(costs[index]),
+            "zostavajuca_strata": float(totals[index] - costs[index]),
+            "celkove_naklady": float(totals[index]),
+            "odporucane": index == choice,
+        }
+        for index, name in enumerate(OPTION_NAMES)
+    ]
+    return {
+        "vzor_utoku": pattern,
+        "odvetvie": row["odvetvie"],
+        "frekvencia": frequency,
+        "frekvencia_predvolena": default,
+        "pravdepodobnosti": dict(zip(LABELS, map(float, probabilities))),
+        "predikovany_dopad": LABELS[int(probabilities.argmax())],
+        "strata_incidentu": float(probabilities @ LOSS.to_numpy()),
+        "ocakavana_strata": expected_loss(probabilities, frequency),
+        "opatrenie": option,
+        "opatrenia_cis": control_list(pattern, option),
+        "cena_opatrenia": float(costs[choice]),
+        "zostavajuca_strata": float(totals[choice] - costs[choice]),
+        "cisty_prinos": float(totals[0] - totals[choice]),
+        "porovnanie": comparison,
+    }
 
 
 def thresholds():
-    """Hodnoty r, pri ktorých sa mení najlacnejšie opatrenie."""
-    points, current = [], 0
-    while current < len(COST) - 1:
-        r, following = min(
-            ((COST[j] - COST[current]) / (EXPOSURE[current] - EXPOSURE[j]), j)
-            for j in range(current + 1, len(COST))
-            if EXPOSURE[j] < EXPOSURE[current]
-        )
-        points.append({"z opatrenia": ACTION_NAMES[current], "na opatrenie": ACTION_NAMES[following], "prah r (€ za deň)": r})
-        current = following
-    return pd.DataFrame(points)
+    """Od akej očakávanej ročnej straty sa oplatí každé opatrenie, rovnako ako v notebooku."""
+    risk_grid = np.linspace(0, 1_500_000, 30_001)
+    residual = residual_share()
+    rows = []
+    for pattern in PATTERNS:
+        best = (option_costs(pattern)[None, :] + risk_grid[:, None] * residual[None, :]).argmin(axis=1)
+        rows.append({
+            "vzor útoku": pattern,
+            **{f"{OPTION_NAMES[option]} od (€)": round(risk_grid[np.argmax(best == option)], -2) if (best == option).any() else np.nan
+               for option in range(1, len(OPTION_NAMES))},
+        })
+    return pd.DataFrame(rows)
 
 
-def known_cwe_ids(bundle):
-    names = bundle["features"].named_transformers_["cwe"].get_feature_names_out()
-    return sorted(names, key=lambda value: int(value.split("-")[1]))
+def cost_table():
+    rows = []
+    for pattern in PATTERNS:
+        costs = option_costs(pattern)
+        rows.append({
+            "vzor útoku": pattern,
+            **{f"{name} (€)": costs[index] for index, name in enumerate(OPTION_NAMES)},
+            "prevencia": control_list(pattern, "Prevencia"),
+            "detekcia a reakcia": control_list(pattern, "Detekcia a reakcia"),
+        })
+    return pd.DataFrame(rows)
 
 
-def recognized_terms(bundle, description):
-    """Počet slov alebo dvojíc slov z popisu, ktoré model pozná."""
-    vectorizer = bundle["features"].named_transformers_["text"]
-    return int(vectorizer.transform([description]).nnz)
+def load_register():
+    """Register scenárov zoradený podľa priority. Scenáre bez opatrenia sú na konci."""
+    register = pd.read_csv(REGISTER_PATH)
+    return register.sort_values(["priorita", "očakávaná strata (€)"], ascending=[True, False], na_position="last",
+                                ignore_index=True)
 
 
-def temporary_control(cwe_ids):
-    for cwe in cwe_ids:
-        if cwe in CONTROLS:
-            return CONTROLS[cwe]
-    return "posúdiť individuálne podľa dotknutej služby"
+# ---------------------------------------------------------------- databáza
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS hodnotenia (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    vytvorene TEXT NOT NULL,
+    zdroj TEXT NOT NULL,
+    nazov TEXT NOT NULL DEFAULT '',
+    odvetvie TEXT NOT NULL,
+    vzor_utoku TEXT NOT NULL,
+    frekvencia REAL NOT NULL,
+    p_nizky REAL NOT NULL,
+    p_stredny REAL NOT NULL,
+    p_vysoky REAL NOT NULL,
+    predikovany_dopad TEXT NOT NULL,
+    skutocny_dopad TEXT,
+    strata_incidentu REAL NOT NULL,
+    ocakavana_strata REAL NOT NULL,
+    opatrenie TEXT NOT NULL,
+    opatrenia_cis TEXT NOT NULL,
+    cena_opatrenia REAL NOT NULL,
+    zostavajuca_strata REAL NOT NULL,
+    cisty_prinos REAL NOT NULL,
+    vstup TEXT NOT NULL
+)
+"""
+RECORD_COLUMNS = [
+    "id", "vytvorene", "zdroj", "nazov", "odvetvie", "vzor_utoku", "frekvencia",
+    "p_nizky", "p_stredny", "p_vysoky", "predikovany_dopad", "skutocny_dopad",
+    "strata_incidentu", "ocakavana_strata", "opatrenie", "opatrenia_cis",
+    "cena_opatrenia", "zostavajuca_strata", "cisty_prinos", "vstup",
+]
 
 
-def assess(bundle, description, cwe_ids, today=None):
-    """Vyhodnotí jeden záznam: pravdepodobnosti, riziko, opatrenie a termíny."""
-    today = today or date.today()
-    frame = pd.DataFrame({"description": [description], "cwe_text": [" ".join(cwe_ids)]})
-    probabilities = predict_probabilities(bundle, frame)
-    decisions, expected_risk = choose_actions(probabilities)
-    index, risk = int(decisions[0]), float(expected_risk[0])
-    action = ACTION_NAMES[index]
-
-    costs = pd.DataFrame({
-        "opatrenie": ACTION_NAMES,
-        "práca (€)": COST,
-        "efektívne dni expozície": EXPOSURE,
-        "očakávaná škoda (€)": EXPOSURE * risk,
-        "očakávané náklady spolu (€)": COST + EXPOSURE * risk,
-    })
-
-    warnings = []
-    if re.search(LEAKAGE_PATTERN, description, flags=re.IGNORECASE):
-        warnings.append(
-            "Popis uvádza skóre alebo závažnosť. Takéto záznamy boli z učenia vylúčené, "
-            "preto môže byť odhad menej spoľahlivý."
-        )
-    terms = recognized_terms(bundle, description)
-    if terms < 5:
-        warnings.append(
-            f"Model v popise rozpoznal iba {terms} výrazov. Odhad je slabo podložený, "
-            "popis by mal byť podrobnejší a v angličtine."
-        )
-
-    return {
-        "probabilities": dict(zip(LABELS, probabilities[0].tolist())),
-        "predicted_class": LABELS[int(probabilities[0].argmax())],
-        "expected_risk": risk,
-        "action": action,
-        "steps": ACTION_STEPS[action],
-        "protect_by": today + timedelta(days=int(ACTION_ASSUMPTIONS.loc[action, "dni do ochrany"])),
-        "fix_by": today + timedelta(days=int(ACTION_ASSUMPTIONS.loc[action, "dni do opravy"])),
-        "control": temporary_control(cwe_ids),
-        "costs": costs,
-        "warnings": warnings,
-    }
-
-
-def load_records(path=RECORDS_PATH):
-    if not path.exists():
-        return pd.DataFrame(columns=RECORD_COLUMNS)
-    return pd.read_csv(path, keep_default_na=False, dtype={"cve_id": str, "cwe_text": str, "zaznam_id": str})
-
-
-def _save_records(records, path):
+def connect(path=None):
+    path = Path(path or DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
-    partial = path.with_suffix(".part")
-    records.to_csv(partial, index=False, encoding="utf-8")
-    partial.replace(path)
+    connection = sqlite3.connect(path, timeout=10)
+    connection.execute(SCHEMA)
+    return connection
 
 
-def add_record(cve_id, description, cwe_ids, result, path=RECORDS_PATH):
-    row = {
-        "zaznam_id": uuid.uuid4().hex[:12],
-        "pridane": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "cve_id": cve_id,
-        "description": description,
-        "cwe_text": " ".join(cwe_ids),
-        **{f"P_{label}": result["probabilities"][label] for label in LABELS},
-        "ocakavane_denne_riziko": result["expected_risk"],
-        "opatrenie": result["action"],
+def save_assessment(incident, result, source, name="", actual_impact=None, path=None):
+    """Uloží hodnotenie do tabuľky hodnotenia a vráti jeho id."""
+    probabilities = result["pravdepodobnosti"]
+    values = {
+        "vytvorene": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "zdroj": source,
+        "nazov": (name or "").strip(),
+        "odvetvie": result["odvetvie"],
+        "vzor_utoku": result["vzor_utoku"],
+        "frekvencia": result["frekvencia"],
+        "p_nizky": probabilities["nízky"],
+        "p_stredny": probabilities["stredný"],
+        "p_vysoky": probabilities["vysoký"],
+        "predikovany_dopad": result["predikovany_dopad"],
+        "skutocny_dopad": actual_impact,
+        "strata_incidentu": result["strata_incidentu"],
+        "ocakavana_strata": result["ocakavana_strata"],
+        "opatrenie": result["opatrenie"],
+        "opatrenia_cis": result["opatrenia_cis"],
+        "cena_opatrenia": result["cena_opatrenia"],
+        "zostavajuca_strata": result["zostavajuca_strata"],
+        "cisty_prinos": result["cisty_prinos"],
+        "vstup": json.dumps(incident, ensure_ascii=False, sort_keys=True),
     }
-    records = load_records(path)
-    new_row = pd.DataFrame([row], columns=RECORD_COLUMNS)
-    _save_records(new_row if records.empty else pd.concat([records, new_row], ignore_index=True), path)
-    return row["zaznam_id"]
+    with closing(connect(path)) as connection, connection:
+        cursor = connection.execute(
+            f"INSERT INTO hodnotenia ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+            list(values.values()),
+        )
+        return cursor.lastrowid
 
 
-def delete_records(record_ids, path=RECORDS_PATH):
-    records = load_records(path)
-    _save_records(records[~records["zaznam_id"].isin(record_ids)], path)
+def load_assessments(path=None):
+    """Všetky uložené hodnotenia zoradené od najvyššej očakávanej straty."""
+    with closing(connect(path)) as connection:
+        return pd.read_sql_query(
+            f"SELECT {', '.join(RECORD_COLUMNS)} FROM hodnotenia ORDER BY ocakavana_strata DESC, id DESC",
+            connection,
+        )
+
+
+def delete_assessments(ids, path=None):
+    ids = [int(value) for value in ids]
+    if not ids:
+        return 0
+    with closing(connect(path)) as connection, connection:
+        cursor = connection.execute(f"DELETE FROM hodnotenia WHERE id IN ({', '.join('?' * len(ids))})", ids)
+        return cursor.rowcount
+
+
+# ---------------------------------------------------------------- overenie
+
+def verify():
+    """Porovná pravdepodobnosti zo vstupu formulára s predikciou nad pôvodným riadkom vcdb_clean.csv."""
+    tests = test_incidents()
+    bundle = context()["bundle"]
+    direct = calibrated_probabilities(bundle, tests)
+    via_form = calibrated_probabilities(
+        bundle, pd.concat([to_frame(from_clean_row(row)) for _, row in tests.iterrows()], ignore_index=True)
+    )
+    difference = np.abs(direct - via_form).max(axis=1)
+    patterns = [to_row(from_clean_row(row))["vzor_utoku"] for _, row in tests.iterrows()]
+    return {
+        "incidenty": len(tests),
+        "max_rozdiel": float(difference.max()),
+        "priemerny_rozdiel": float(difference.mean()),
+        "rozdiel_pod_0_01": float((difference < 0.01).mean()),
+        "rovnaka_trieda": float((direct.argmax(axis=1) == via_form.argmax(axis=1)).mean()),
+        "rovnaky_vzor": float((np.array(patterns) == tests["vzor_utoku"].to_numpy()).mean()),
+    }
 
 
 if __name__ == "__main__":
-    train_and_save()
-    print(f"Model uložený: {MODEL_PATH}")
+    result = verify()
+    print(f"Testovacie incidenty: {result['incidenty']}")
+    print(f"Najväčší rozdiel pravdepodobnosti: {result['max_rozdiel']:.4f}, priemerný: {result['priemerny_rozdiel']:.5f}")
+    print(f"Rozdiel pod 0,01: {result['rozdiel_pod_0_01']:.1%}, rovnaká trieda: {result['rovnaka_trieda']:.1%}, "
+          f"rovnaký vzor útoku: {result['rovnaky_vzor']:.1%}")

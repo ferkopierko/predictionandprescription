@@ -1,32 +1,34 @@
 x-common: &common
   build: .
-  image: opatrenia-zranitelnosti
+  image: hodnotenie-rizika
   volumes:
-    # Dáta a modely zostávajú na disku mimo kontajnera
+    # Dáta a modely z notebookov zostávajú na disku mimo kontajnera
     - ./data:/app/data
-    # Databáza prevádzky je vo volume Dockeru, kde spoľahlivo funguje zamykanie SQLite
+    # Databáza hodnotení je vo volume Dockeru, kde spoľahlivo funguje zamykanie SQLite
     - runtime:/app/runtime
+  environment:
+    HODNOTENIA_DB: /app/runtime/hodnotenia.db
   restart: unless-stopped
 
 services:
   app:
     <<: *common
-    container_name: opatrenia-zranitelnosti
-    environment:
-      PREVADZKA_DB: /app/runtime/prevadzka.db
+    container_name: hodnotenie-rizika-app
     ports:
       - "127.0.0.1:8501:8501"
 
-  worker:
+  api:
     <<: *common
-    container_name: opatrenia-prevadzka
-    command: ["python", "prevadzka.py"]
-    environment:
-      PREVADZKA_DB: /app/runtime/prevadzka.db
-      POLL_SECONDS: "900"
-      NVD_API_KEY: ${NVD_API_KEY:-}
+    container_name: hodnotenie-rizika-api
+    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/moznosti', timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
 volumes:
   runtime:

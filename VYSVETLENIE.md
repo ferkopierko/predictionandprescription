@@ -209,7 +209,7 @@ Pre porovnanie, pri zdravotníctve a krádeži zariadení je riziko 112 tis. €
 | [predikcia.ipynb](predikcia.ipynb) | 2 modely, metriky, grafy 3 a 4 | `vcdb_clean.csv` | `vcdb_predikcie.csv`, `model_dopad_vcdb.joblib` |
 | [predikcia_70_30.ipynb](predikcia_70_30.ipynb) | jednoduchšia úloha, grafy 5 a 6 | `vcdb_clean.csv` | – |
 | [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) | odporúčania, grafy 7 až 9 | všetky 3 CSV vyššie | `vcdb_register_rizik.csv` |
-| [app.py](app.py) a ďalšie `.py` | webová aplikácia | zatiaľ model nad CVE | SQLite databáza |
+| [app.py](app.py), [api.py](api.py), [opatrenia.py](opatrenia.py) | webová aplikácia a REST API | `model_dopad_vcdb.joblib`, všetky 3 CSV vyššie | SQLite databáza `hodnotenia` |
 
 Funkcie na prípravu znakov sú v samostatnom súbore [vcdb_model.py](vcdb_model.py), aby sa uložený model dal načítať aj mimo notebooku, napríklad v aplikácii.
 
@@ -256,5 +256,5 @@ Na úrovni celých scenárov malý (menej ako 1 %), lebo priemer predikcií sa b
 **Prečo VCDB a nie CVE?**
 CVE opisuje chyby v softvéri, nie útoky. Nevieme z neho, kto útočil ani aký bol dopad. Na hodnotenie rizika potrebujeme pravdepodobnosť aj dopad a tie má iba databáza incidentov.
 
-**Čo je zatiaľ nedokončené?**
-Webová aplikácia stále používa starší model nad CVE a ešte nie je prepojená s modelom VCDB. Chýba aj BPMN diagram procesu.
+**Ako je riešenie integrované do informačného systému?**
+Webová aplikácia (Streamlit) aj REST API (FastAPI) používajú uložený model VCDB a rovnaký výpočet opatrení ako notebook. Hodnotenia ukladajú do spoločnej databázy SQLite a obe bežia v Dockeri. BPMN diagram procesu bol súčasťou zadania č. 1.

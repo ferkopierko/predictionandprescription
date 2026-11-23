@@ -1,419 +1,806 @@
-"""Lokálna aplikácia: pridanie zraniteľnosti, predikcia závažnosti a odporúčané opatrenie.
+"""Aplikácia: hodnotenie rizika bezpečnostného incidentu a odporúčané opatrenie.
 
 Spustenie: streamlit run app.py
 """
 
+import html
 import json
-import re
+from datetime import datetime
 
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 import opatrenia as op
-import prevadzka
+import preklady as pr
 
-st.set_page_config(page_title="Opatrenia pre zraniteľnosti", page_icon="🛡️", layout="wide")
+st.set_page_config(page_title="Hodnotenie rizika incidentov", page_icon="🛡️", layout="wide")
 
-EXAMPLES = {
-    "Vlastný záznam": ("", "", []),
-    "Vzdialené spustenie kódu bez prihlásenia": (
-        "CVE-2026-90001",
-        "A stack-based buffer overflow in the web management interface of Acme Router 3.2 allows "
-        "unauthenticated remote attackers to execute arbitrary code via a crafted HTTP request.",
-        ["CWE-787"],
-    ),
-    "Stored XSS pre prihlásených používateľov": (
-        "CVE-2026-90002",
-        "A stored cross-site scripting vulnerability in the comment module of Example CMS before 2.4 "
-        "allows authenticated users to inject arbitrary web script via the title parameter.",
-        ["CWE-79"],
-    ),
-    "Lokálne zvýšenie oprávnení": (
-        "CVE-2026-90003",
-        "Improper privilege management in the installer of Example Agent on Windows allows a local "
-        "attacker to gain elevated privileges by replacing a temporary file.",
-        ["CWE-269"],
-    ),
+PREFIX = "f_"
+SELECT_FIELDS = ["odvetvie", "velkost_organizacie", "krajina", "cielenost"]
+LIST_FIELDS = ["aktor_typy", "akcia_typy", *op.DETAIL_COLUMNS]
+CHECK_FIELDS = ["atribut_integrity", "atribut_availability"]
+REQUIRED_SELECTS = ["odvetvie", "velkost_organizacie"]
+
+# Jednotné farby pre celú aplikáciu aj grafy (rovnaké odtiene v svetlom aj tmavom režime)
+IMPACT_COLORS = {"nízky": "#2E9E6A", "stredný": "#E09A1F", "vysoký": "#D9463E"}
+IMPACT_CLASS = {"nízky": "low", "stredný": "mid", "vysoký": "high"}
+OPTION_COLORS = dict(zip(op.OPTION_NAMES, ["#94A3B8", "#4A6EEB", "#8B5CF6", "#14A3A1"]))
+COST_COLOR = "#4A6EEB"
+RESIDUAL_COLOR = "#A9B4C6"
+LABEL_COLOR = "#7A8599"
+
+HELP = {
+    "aktor_typy": "Kto incident spôsobil. Ak to neviete, vyberte Neznámy.",
+    "akcia_typy": "Akým spôsobom incident vznikol. Ak to neviete, vyberte Neznámy.",
+    "aktor_variety": "Spresnenie aktéra, napríklad organizovaný zločin alebo správca systému.",
+    "akcia_variety": "Spresnenie útoku, napríklad SQL injection alebo doručenie nesprávnemu adresátovi.",
+    "akcia_vektory": "Cesta, ktorou útok prišiel, napríklad webová aplikácia alebo príloha e-mailu.",
+    "aktivum_variety": "Dotknuté aktíva: server, zariadenie používateľa, nosič dát, osoba, terminál alebo sieťové zariadenie.",
+    "typy_dat": "Aké dáta boli ohrozené.",
+    "motiv": "Motív aktéra. Ak ho nepoznáte, nechajte prázdne.",
+    "sposob_odhalenia": "Kto incident odhalil. Ak to nie je známe, nechajte prázdne.",
+}
+OPTION_TEXT = {
+    "Akceptovať a monitorovať": "Riziko vedome prijať a sledovať výskyt. Pri tejto strate sa žiadne opatrenie nevráti.",
+    "Prevencia": "Zaviesť preventívne opatrenia, ktoré znížia počet incidentov tohto vzoru.",
+    "Detekcia a reakcia": "Zaviesť detekciu, obnovu a riadenie incidentov, ktoré znížia stratu z incidentu.",
+    "Komplexná ochrana": "Zaviesť prevenciu aj detekciu a reakciu. Riziko je také vysoké, že sa oplatí znížiť počet incidentov aj ich dopad.",
 }
 
+# Ikona štítu: st.html odstraňuje SVG, preto sa kreslí cez CSS masku (.rk-shield)
+SHIELD = '<span class="rk-shield"></span>'
+SHIELD_SVG = (
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' "
+    "stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3l7 3v5c0 4.6-3 8.5-7 10-4-1.5-7-5.4-7-10V6l7-3z'/%3E"
+    "%3Cpath d='M9 12l2 2 4-4'/%3E%3C/svg%3E"
+)
+
+CSS = """
+<style>
+:root {
+  --rk-surface: #ffffff;
+  --rk-surface-2: #f1f4f9;
+  --rk-border: #dde3ec;
+  --rk-muted: #5d6879;
+  --rk-primary: #2f5bea;
+  --rk-primary-soft: rgba(47, 91, 234, .09);
+  --rk-low: #237a52;  --rk-low-bg: rgba(46, 158, 106, .13);
+  --rk-mid: #9a6408;  --rk-mid-bg: rgba(224, 154, 31, .17);
+  --rk-high: #b8332c; --rk-high-bg: rgba(217, 70, 62, .13);
+  --rk-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 6px 20px rgba(16, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --rk-surface: #161c26;
+    --rk-surface-2: #1d2531;
+    --rk-border: #2b3543;
+    --rk-muted: #9aa5b6;
+    --rk-primary: #7b97f8;
+    --rk-primary-soft: rgba(110, 142, 247, .14);
+    --rk-low: #5fd09a;  --rk-low-bg: rgba(63, 185, 127, .16);
+    --rk-mid: #f2bb55;  --rk-mid-bg: rgba(237, 170, 54, .16);
+    --rk-high: #f08a84; --rk-high-bg: rgba(232, 98, 91, .17);
+    --rk-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+  }
+}
+
+/* Skryť ovládanie Streamlitu */
+[data-testid="stToolbar"], [data-testid="stAppDeployButton"], [data-testid="stMainMenu"], #MainMenu,
+[data-testid="stDecoration"], [data-testid="stStatusWidget"] { display: none !important; }
+header[data-testid="stHeader"] { background: transparent; height: 0; }
+[data-testid="stMainBlockContainer"] { padding-top: 1.6rem; padding-bottom: 3rem; max-width: 1380px; }
+@media (max-width: 900px) { [data-testid="stMainBlockContainer"] { padding-left: 1rem; padding-right: 1rem; } }
+
+/* Hlavička */
+.rk-shield { display: block; width: 26px; height: 26px; background: currentColor;
+  -webkit-mask: url("SHIELD_SVG") center / contain no-repeat; mask: url("SHIELD_SVG") center / contain no-repeat; }
+.rk-header { display: flex; align-items: flex-start; gap: 14px; margin-bottom: .4rem; }
+.rk-header > div:last-child { flex: 1; min-width: 0; }
+.rk-logo { width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+  color: #fff; background: linear-gradient(135deg, #2f5bea, #14a3a1); flex: none; }
+.rk-title { font-size: 1.55rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.2; }
+.rk-subtitle { color: var(--rk-muted); font-size: .95rem; margin-top: 2px; }
+.rk-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.rk-chip { font-size: .78rem; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--rk-border);
+  color: var(--rk-muted); background: var(--rk-surface); white-space: nowrap; }
+
+/* Záložky */
+[data-testid="stTabs"] [data-baseweb="tab-list"] { gap: 4px; }
+[data-testid="stTab"] p { font-size: 1rem; font-weight: 600; }
+
+/* Kroky formulára */
+.rk-step { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 1.02rem; margin: 2px 0 2px; }
+.rk-step span { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: .8rem;
+  background: var(--rk-primary-soft); color: var(--rk-primary); flex: none; }
+.rk-step small { font-weight: 400; color: var(--rk-muted); font-size: .85rem; }
+.rk-hint { color: var(--rk-muted); font-size: .86rem; margin: -2px 0 4px; }
+.rk-hint b { font-weight: 600; }
+
+/* Karty a ukazovatele */
+.rk-card { background: var(--rk-surface); border: 1px solid var(--rk-border); border-radius: 14px;
+  box-shadow: var(--rk-shadow); padding: 18px 20px; }
+.rk-label { text-transform: uppercase; letter-spacing: .06em; font-size: .72rem; font-weight: 600; color: var(--rk-muted); }
+.rk-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin: 4px 0 14px; }
+.rk-kpi { background: var(--rk-surface); border: 1px solid var(--rk-border); border-radius: 12px; padding: 14px 16px; }
+.rk-kpi-value { font-size: 1.5rem; font-weight: 700; margin-top: 4px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+.rk-note { color: var(--rk-muted); font-size: .84rem; margin-top: 4px; }
+
+/* Výsledok */
+.rk-hero { background: var(--rk-surface); border: 1px solid var(--rk-border); border-radius: 16px;
+  box-shadow: var(--rk-shadow); overflow: hidden; }
+.rk-hero-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 12px 20px; border-bottom: 1px solid var(--rk-border); background: var(--rk-surface-2); }
+.rk-hero-top b { font-weight: 650; }
+.rk-tag { font-size: .8rem; color: var(--rk-muted); }
+.rk-reco { padding: 18px 20px 14px; border-left: 5px solid var(--opt); }
+.rk-reco-name { font-size: 1.85rem; font-weight: 700; letter-spacing: -.01em; margin: 2px 0 4px; line-height: 1.2; }
+.rk-reco-text { font-size: .95rem; }
+.rk-cis { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.rk-cis span { font-size: .8rem; font-weight: 600; padding: 2px 9px; border-radius: 6px;
+  background: var(--rk-primary-soft); color: var(--rk-primary); }
+.rk-hero .rk-kpis { padding: 0 20px; margin: 4px 0 0; }
+.rk-hero .rk-kpi { background: var(--rk-surface-2); border: none; }
+.rk-savings { padding: 12px 20px 16px; font-size: .92rem; color: var(--rk-muted); }
+.rk-savings b { color: inherit; font-weight: 650; }
+.rk-impact { display: inline-block; padding: 1px 12px; border-radius: 999px; font-size: 1.25rem; font-weight: 700; }
+.rk-impact.low { color: var(--rk-low); background: var(--rk-low-bg); }
+.rk-impact.mid { color: var(--rk-mid); background: var(--rk-mid-bg); }
+.rk-impact.high { color: var(--rk-high); background: var(--rk-high-bg); }
+.rk-impact.small { font-size: .85rem; padding: 0 9px; }
+.rk-verdict { display: flex; gap: 12px; align-items: flex-start; margin: 0 20px 18px; padding: 12px 14px; border-radius: 12px; }
+.rk-verdict.ok { background: var(--rk-low-bg); }
+.rk-verdict.miss { background: var(--rk-mid-bg); }
+.rk-verdict .rk-icon { font-size: 1.1rem; font-weight: 700; line-height: 1.5; }
+.rk-verdict.ok .rk-icon { color: var(--rk-low); }
+.rk-verdict.miss .rk-icon { color: var(--rk-mid); }
+.rk-section { font-weight: 650; margin: 18px 0 2px; }
+.rk-empty { text-align: center; padding: 38px 24px; border: 1.5px dashed var(--rk-border); border-radius: 16px; }
+.rk-empty-icon { width: 52px; height: 52px; margin: 0 auto 10px; border-radius: 14px; display: grid; place-items: center;
+  color: var(--rk-primary); background: var(--rk-primary-soft); }
+.rk-empty h4 { margin: 0 0 6px; padding: 0; font-size: 1.1rem; }
+.rk-empty p { color: var(--rk-muted); margin: 0 auto; max-width: 400px; font-size: .92rem; }
+.rk-demo { display: flex; gap: 10px; align-items: center; padding: 10px 14px; border-radius: 12px;
+  background: var(--rk-primary-soft); font-size: .92rem; margin-bottom: 6px; }
+.rk-demo b { font-weight: 650; }
+
+/* Panel výsledku ostáva na širokej obrazovke pri posúvaní formulára viditeľný */
+@media (min-width: 1100px) {
+  .st-key-result_panel { position: sticky; top: 1rem; }
+}
+/* Na úzkej obrazovke (stĺpce pod sebou) je výsledok nad formulárom */
+@media (max-width: 640px) {
+  [data-testid="stHorizontalBlock"]:has(.st-key-has_result) { flex-direction: column-reverse; }
+}
+.st-key-evaluate button { min-height: 2.9rem; font-size: 1.02rem; font-weight: 600; }
+</style>
+"""
+
+
+# ---------------------------------------------------------------- formát čísel
 
 def euro(value):
-    return f"{value:,.0f} €".replace(",", " ")
+    return f"{value:,.0f}".replace(",", " ") + " €"
 
 
-def decimal(value, digits=2):
-    return f"{value:,.{digits}f}".replace(",", " ").replace(".", ",")
+def thousands_euro(value):
+    return f"{value / 1000:,.0f}".replace(",", " ") + " tis. €"
+
+
+def decimal(value, digits=3):
+    return f"{value:.{digits}f}".replace(".", ",")
 
 
 def percent(value):
-    return f"{value * 100:.1f} %".replace(".", ",")
+    return f"{value * 100:.0f} %"
 
 
-def cwe_label(cwe):
-    return f"{cwe}: {op.CWE_NAMES[cwe]}" if cwe in op.CWE_NAMES else cwe
+def parse_decimal(text):
+    try:
+        return float(str(text).strip().replace(" ", "").replace(" ", "").replace(",", "."))
+    except ValueError:
+        return None
 
 
-@st.cache_resource(show_spinner="Pripravujem model. Pri prvom spustení ho treba naučiť, trvá to 1 až 3 minúty.", max_entries=1)
-def get_bundle(_path_key, _modified):
-    return op.load_active()
+def date_time(text):
+    try:
+        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S").strftime("%-d. %-m. %Y %H:%M")
+    except (TypeError, ValueError):
+        return text
 
 
-def active_bundle():
-    """Načíta aktuálny model. Po pretrénovaní sa zmení dátum súboru a model sa obnoví."""
-    path = op.active_model_path()
-    return get_bundle(str(path), path.stat().st_mtime if path.exists() else 0)
+def esc(text):
+    return html.escape(str(text))
 
 
-@st.cache_data(show_spinner=False)
-def get_test_results():
-    return pd.read_csv(op.TEST_RESULTS_PATH, keep_default_na=False)
+def impact_pill(label, small=False):
+    return f'<span class="rk-impact {IMPACT_CLASS[label]}{" small" if small else ""}">{esc(label)}</span>'
 
 
-@st.cache_data(show_spinner=False)
-def known_cwes(_bundle):
-    known = op.known_cwe_ids(_bundle)
-    common = [cwe for cwe in known if cwe in op.CWE_NAMES]
-    return common + [cwe for cwe in known if cwe not in op.CWE_NAMES]
-
-
-def apply_example():
-    cve_id, description, cwe_ids = EXAMPLES[st.session_state["example"]]
-    st.session_state["cve_id"] = cve_id
-    st.session_state["description"] = description
-    st.session_state["cwe_ids"] = cwe_ids
-
-
-def probability_chart(probabilities):
-    frame = pd.DataFrame({
-        "závažnosť": op.LABELS,
-        "pravdepodobnosť": [probabilities[label] for label in op.LABELS],
-    })
-    frame["text"] = frame["pravdepodobnosť"].map(percent)
-    base = alt.Chart(frame).encode(
-        y=alt.Y("závažnosť:N", sort=op.LABELS[::-1], title=None, axis=alt.Axis(ticks=False, domain=False)),
-        x=alt.X("pravdepodobnosť:Q", title=None, axis=None, scale=alt.Scale(domain=[0, 1.15])),
-        tooltip=[alt.Tooltip("závažnosť:N"), alt.Tooltip("text:N", title="pravdepodobnosť")],
+def kpi_row(items):
+    cells = "".join(
+        f'<div class="rk-kpi"><div class="rk-label">{esc(label)}</div><div class="rk-kpi-value">{value}</div>'
+        f'{f"<div class=rk-note>{note}</div>" if note else ""}</div>'
+        for label, value, note in items
     )
-    bars = base.mark_bar(color="#2a78d6", cornerRadiusEnd=4, height=22)
-    labels = base.mark_text(align="left", dx=5).encode(text="text:N")
-    return (bars + labels).properties(height=170)
+    return f'<div class="rk-kpis">{cells}</div>'
 
 
-def show_result(result, title):
-    st.subheader(title)
-    for warning in result["warnings"]:
-        st.warning(warning)
+def step(number, title, note=""):
+    st.html(f'<div class="rk-step"><span>{number}</span>{esc(title)}{f" <small>{esc(note)}</small>" if note else ""}</div>')
 
-    action = result["action"]
-    first, second, third = st.columns([1.5, 1, 1])
-    first.metric("Odporúčané opatrenie", action)
-    second.metric("Najpravdepodobnejšia závažnosť", result["predicted_class"])
-    third.metric("Očakávaná denná škoda", f"{decimal(result['expected_risk'])} €")
 
-    st.markdown(f"**Čo urobiť:** {result['steps']}")
-    if action == "Dočasná ochrana":
-        st.markdown(
-            f"**Termíny:** ochrana do {result['protect_by']:%d.%m.%Y}, oprava do {result['fix_by']:%d.%m.%Y}."
-        )
-        st.markdown(f"**Vhodná dočasná ochrana:** {result['control']}.")
+@st.cache_resource(show_spinner="Načítavam model a dáta…")
+def load_context():
+    return op.context()
+
+
+# ---------------------------------------------------------------- stav formulára
+
+def form_values():
+    values = {field: st.session_state.get(PREFIX + field) for field in SELECT_FIELDS + LIST_FIELDS + CHECK_FIELDS}
+    return {field: list(value or []) if field in LIST_FIELDS else value for field, value in values.items()}
+
+
+def model_input(values):
+    """Nevyplnené povinné výbery nahradí neznámou hodnotou, aby sa dal zobraziť vzor útoku a frekvencia."""
+    defaults = op.default_input()
+    return {field: defaults[field] if value is None else value for field, value in values.items()}
+
+
+def set_form(values):
+    for field, value in values.items():
+        st.session_state[PREFIX + field] = list(value) if isinstance(value, list) else value
+    # Frekvencia sa po zmene incidentu znova predvyplní
+    st.session_state.pop("frekvencia_pre", None)
+
+
+def empty_form():
+    values = op.default_input()
+    for field in REQUIRED_SELECTS:
+        values[field] = None
+    return values
+
+
+def init_form():
+    if PREFIX + "krajina" not in st.session_state:
+        set_form(empty_form())
+
+
+def fill_random_incident():
+    demo = op.random_test_incident()
+    set_form(demo["vstup"])
+    st.session_state["demo"] = demo
+    st.session_state.pop("vysledok", None)
+    st.session_state.pop("chyby", None)
+
+
+def clear_form():
+    set_form(empty_form())
+    for key in ["demo", "vysledok", "chyby"]:
+        st.session_state.pop(key, None)
+    st.session_state[PREFIX + "nazov"] = ""
+
+
+def forget_demo():
+    """Po ručnej zmene formulára už skutočný dopad testovacieho incidentu neplatí."""
+    st.session_state.pop("demo", None)
+
+
+def required_errors(values):
+    errors = []
+    if values["odvetvie"] is None:
+        errors.append("Vyberte odvetvie organizácie.")
+    if values["velkost_organizacie"] is None:
+        errors.append("Vyberte veľkosť organizácie.")
+    if not op.actor_types(values):
+        errors.append("Vyberte aspoň jeden typ aktéra. Ak aktéra nepoznáte, vyberte Neznámy.")
+    if not op.action_types(values):
+        errors.append("Vyberte aspoň jeden typ útoku. Ak spôsob nepoznáte, vyberte Neznámy.")
+    return errors
+
+
+def evaluate():
+    values = form_values()
+    errors = required_errors(values)
+    frequency = parse_decimal(st.session_state.get("frekvencia", ""))
+    if frequency is None or not 0 <= frequency <= 100:
+        errors.append("Frekvencia musí byť číslo od 0 do 100, napríklad 0,25.")
+    if not errors:
+        errors = op.validate(values)
+    if errors:
+        st.session_state["chyby"] = errors
+        st.session_state.pop("vysledok", None)
+        return
+    st.session_state.pop("chyby", None)
+    result = op.assess(values, frequency)
+    demo = st.session_state.get("demo")
+    record_id = op.save_assessment(
+        values, result, source="aplikácia", name=st.session_state.get(PREFIX + "nazov", ""),
+        actual_impact=demo["skutocny_dopad"] if demo else None,
+    )
+    st.session_state["vysledok"] = (record_id, result, demo, st.session_state.get(PREFIX + "nazov", ""))
+
+
+# ---------------------------------------------------------------- grafy
+
+def probability_chart(probabilities, actual=None):
+    frame = pd.DataFrame({"dopad": op.LABELS, "p": [probabilities[label] for label in op.LABELS]})
+    frame["text"] = [percent(p) + ("   ◀ skutočný dopad" if label == actual else "") for label, p in zip(frame["dopad"], frame["p"])]
+    base = alt.Chart(frame).encode(
+        y=alt.Y("dopad:N", sort=op.LABELS, title=None, axis=alt.Axis(ticks=False, domain=False, labelFontSize=13, labelPadding=8)),
+        x=alt.X("p:Q", title=None, axis=None, scale=alt.Scale(domain=[0, 1.45])),
+        tooltip=[alt.Tooltip("dopad:N", title="dopad"), alt.Tooltip("text:N", title="pravdepodobnosť")],
+    )
+    bars = base.mark_bar(cornerRadiusEnd=5, height=22).encode(
+        color=alt.Color("dopad:N", scale=alt.Scale(domain=list(IMPACT_COLORS), range=list(IMPACT_COLORS.values())), legend=None)
+    )
+    labels = base.mark_text(align="left", dx=6, fontSize=13, fontWeight=600, color=LABEL_COLOR).encode(text="text:N")
+    return (bars + labels).properties(height=125).configure_view(stroke=None)
+
+
+def cost_chart(comparison):
+    rows = []
+    for item in comparison:
+        name = ("★ " if item["odporucane"] else "") + item["opatrenie"]
+        rows.append({"opatrenie": name, "časť": "cena opatrenia", "hodnota": item["cena"], "poradie": 0,
+                     "suma": euro(item["cena"])})
+        rows.append({"opatrenie": name, "časť": "zostávajúca strata", "hodnota": item["zostavajuca_strata"], "poradie": 1,
+                     "suma": euro(item["zostavajuca_strata"])})
+    frame = pd.DataFrame(rows)
+    order = list(dict.fromkeys(frame["opatrenie"]))
+    totals = pd.DataFrame({
+        "opatrenie": order,
+        "spolu": [item["celkove_naklady"] for item in comparison],
+        "text": [euro(item["celkove_naklady"]) for item in comparison],
+    })
+    top = totals["spolu"].max() * 1.32
+    y = alt.Y("opatrenie:N", sort=order, title=None, axis=alt.Axis(ticks=False, domain=False, labelFontSize=13,
+                                                                   labelLimit=230, labelPadding=8))
+    bars = alt.Chart(frame).mark_bar(height=20).encode(
+        y=y,
+        x=alt.X("hodnota:Q", stack="zero", title=None, axis=None, scale=alt.Scale(domain=[0, top])),
+        color=alt.Color("časť:N", scale=alt.Scale(domain=["cena opatrenia", "zostávajúca strata"],
+                                                  range=[COST_COLOR, RESIDUAL_COLOR]),
+                        legend=None),
+        order=alt.Order("poradie:Q"),
+        tooltip=[alt.Tooltip("opatrenie:N"), alt.Tooltip("časť:N"), alt.Tooltip("suma:N", title="suma")],
+    )
+    labels = alt.Chart(totals).mark_text(align="left", dx=6, fontSize=13, fontWeight=600, color=LABEL_COLOR).encode(
+        y=y, x="spolu:Q", text="text:N"
+    )
+    return (bars + labels).properties(height=200).configure_view(stroke=None)
+
+
+def register_chart(register):
+    frame = register.copy()
+    frame["strata"] = frame["očakávaná strata (€)"].map(thousands_euro)
+    frame["P"] = frame["P(vysoký dopad)"].map(percent)
+    frame["cena"] = frame["cena opatrenia (€)"].map(euro)
+    frame["prínos"] = frame["čistý prínos (€)"].map(euro)
+    sectors = list(dict.fromkeys(frame.sort_values("odvetvie")["odvetvie"]))
+    base = alt.Chart(frame).encode(
+        x=alt.X("odvetvie:N", sort=sectors, title=None, scale=alt.Scale(paddingInner=0.05),
+                axis=alt.Axis(orient="top", labelAngle=0, labelLimit=150, ticks=False, domain=False, labelFontSize=12)),
+        y=alt.Y("vzor_utoku:N", sort=op.PATTERNS, title=None, scale=alt.Scale(paddingInner=0.08),
+                axis=alt.Axis(ticks=False, domain=False, labelFontSize=12, labelLimit=220, labelPadding=8)),
+    )
+    cells = base.mark_rect(cornerRadius=6).encode(
+        color=alt.Color("opatrenie:N", scale=alt.Scale(domain=list(OPTION_COLORS), range=list(OPTION_COLORS.values())),
+                        legend=alt.Legend(orient="bottom", title=None, labelFontSize=12, columns=4, symbolType="square")),
+        tooltip=[
+            alt.Tooltip("odvetvie:N"), alt.Tooltip("vzor_utoku:N", title="vzor útoku"), alt.Tooltip("opatrenie:N"),
+            alt.Tooltip("strata:N", title="očakávaná strata"), alt.Tooltip("P:N", title="P(vysoký dopad)"),
+            alt.Tooltip("cena:N", title="cena opatrenia"), alt.Tooltip("prínos:N", title="čistý prínos"),
+        ],
+    )
+    text = base.mark_text(fontSize=12, fontWeight=600, color="#ffffff").encode(text="strata:N")
+    return (cells + text).properties(height=430).configure_view(stroke=None)
+
+
+# ---------------------------------------------------------------- výsledok
+
+def result_html(record_id, result, demo, name):
+    option = result["opatrenie"]
+    predicted = result["predikovany_dopad"]
+    controls = [item.strip() for item in str(result["opatrenia_cis"]).split(",") if item.strip()]
+    cis = ""
+    if option != op.OPTION_NAMES[0] and controls:
+        cis = '<div class="rk-cis">' + "".join(f"<span>{esc(item)}</span>" for item in controls) + "</div>"
+    title = f"Hodnotenie č. {record_id}" + (f" · {esc(name)}" if name else "")
+
+    if option == op.OPTION_NAMES[0]:
+        savings = (f"Stačí monitorovanie za <b>{euro(result['cena_opatrenia'])}</b> ročne. "
+                   "Každé opatrenie by stálo viac, než by ušetrilo.")
     else:
-        st.markdown(f"**Termín opravy:** do {result['fix_by']:%d.%m.%Y}.")
+        savings = (f"Opatrenie stojí <b>{euro(result['cena_opatrenia'])}</b> ročne, znižuje očakávanú stratu na "
+                   f"<b>{euro(result['zostavajuca_strata'])}</b> a oproti nečinnosti ušetrí "
+                   f"<b>{euro(result['cisty_prinos'])}</b> ročne.")
 
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Pravdepodobnosť závažnosti**")
-        st.altair_chart(probability_chart(result["probabilities"]), width="stretch")
-    with right:
-        st.markdown("**Porovnanie opatrení**")
-        costs = result["costs"].copy()
-        costs.insert(1, "odporúčané", costs["opatrenie"].eq(action).map({True: "áno", False: ""}))
+    verdict = ""
+    if demo:
+        actual = demo["skutocny_dopad"]
+        hit = actual == predicted
+        records = f"{demo['pocet_zaznamov']:,}".replace(",", " ")
+        verdict = (
+            f'<div class="rk-verdict {"ok" if hit else "miss"}"><div class="rk-icon">{"✓" if hit else "!"}</div><div>'
+            f'<b>Skutočný dopad testovacieho incidentu:</b> {impact_pill(actual, small=True)} '
+            f'<span class="rk-note">({records} uniknutých záznamov)</span><br>'
+            f'{"Model predikoval správnu triedu." if hit else "Model predikoval inú triedu dopadu."}</div></div>'
+        )
+
+    kpis = kpi_row([
+        ("Predikovaný dopad", impact_pill(predicted),
+         f"pravdepodobnosť {percent(result['pravdepodobnosti'][predicted])}"),
+        ("Očakávaná ročná strata", euro(result["ocakavana_strata"]),
+         f"{decimal(result['frekvencia'])} incidentu ročne × {euro(result['strata_incidentu'])}"),
+    ])
+    return (
+        f'<div class="rk-hero">'
+        f'<div class="rk-hero-top"><b>{title}</b><span class="rk-tag">{esc(result["odvetvie"])} · {esc(result["vzor_utoku"])}</span></div>'
+        f'<div class="rk-reco" style="--opt:{OPTION_COLORS[option]}"><div class="rk-label">Odporúčané opatrenie</div>'
+        f'<div class="rk-reco-name">{esc(option)}</div><div class="rk-reco-text">{esc(OPTION_TEXT[option])}</div>{cis}</div>'
+        f'{kpis}<div class="rk-savings">{savings}</div>{verdict}</div>'
+    )
+
+
+def show_result(record_id, result, demo, name):
+    st.html(result_html(record_id, result, demo, name))
+
+    st.html('<div class="rk-section">Pravdepodobnosť dopadu</div>')
+    st.altair_chart(probability_chart(result["pravdepodobnosti"], demo and demo["skutocny_dopad"]), width="stretch")
+
+    st.html('<div class="rk-section">Ročné náklady podľa opatrenia</div>'
+            '<div class="rk-note"><b style="color:#4A6EEB">■</b> cena opatrenia + <b style="color:#A9B4C6">■</b> strata, ktorá '
+            'zostane. Hviezdička označuje najlacnejšiu možnosť.</div>')
+    st.altair_chart(cost_chart(result["porovnanie"]), width="stretch")
+
+    with st.expander("Podrobné porovnanie opatrení"):
+        comparison = pd.DataFrame(result["porovnanie"])
+        comparison["odporucane"] = comparison["odporucane"].map({True: "áno", False: ""})
+        styled = comparison.style.format({"cena": euro, "zostavajuca_strata": euro, "celkove_naklady": euro})
         st.dataframe(
-            costs,
-            hide_index=True,
-            width="stretch",
+            styled, hide_index=True, width="stretch",
+            column_order=["opatrenie", "odporucane", "cena", "zostavajuca_strata", "celkove_naklady", "opatrenia_cis"],
             column_config={
-                "práca (€)": st.column_config.NumberColumn(format="%.0f"),
-                "efektívne dni expozície": st.column_config.NumberColumn("dni expozície", format="%.1f"),
-                "očakávaná škoda (€)": st.column_config.NumberColumn(format="%.0f"),
-                "očakávané náklady spolu (€)": st.column_config.NumberColumn("spolu (€)", format="%.0f"),
+                "opatrenie": "Opatrenie", "odporucane": "Odporúčané", "cena": "Cena",
+                "zostavajuca_strata": "Zostávajúca strata", "celkove_naklady": "Spolu", "opatrenia_cis": "Opatrenia CIS",
             },
         )
-    st.caption(
-        "Sumy vychádzajú z predpokladov na záložke Predpoklady. Výsledok je prvotné triedenie "
-        "a nenahrádza posúdenie analytikom."
+    st.caption("Sumy vychádzajú z predpokladov na záložke Predpoklady. Výsledok je prvotné posúdenie a nenahrádza analytika.")
+
+
+def empty_result():
+    st.html(
+        f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Výsledok hodnotenia</h4>'
+        '<p>Vyplňte štyri povinné údaje vľavo a kliknite na <b>Vyhodnotiť riziko</b>. Na rýchlu ukážku použite '
+        '<b>Náhodný incident</b> z testovacích dát, pri ňom uvidíte aj skutočný dopad.</p></div>'
     )
 
 
-def new_record_tab(bundle):
-    st.selectbox("Príklad na vyskúšanie", list(EXAMPLES), key="example", on_change=apply_example)
+# ---------------------------------------------------------------- záložky
 
-    with st.form("new_record"):
-        st.text_input("CVE-ID (nepovinné)", key="cve_id", placeholder="CVE-2026-12345")
-        st.text_area(
-            "Popis zraniteľnosti (po anglicky)",
-            key="description",
-            height=130,
-            help="Model bol naučený na anglických popisoch z databázy CVE.",
-        )
-        st.multiselect(
-            "Typ slabiny CWE (nepovinné)",
-            known_cwes(bundle),
-            key="cwe_ids",
-            format_func=cwe_label,
-            placeholder="Vyberte typ, ak je známy",
-        )
-        submitted = st.form_submit_button("Pridať a predpovedať", type="primary")
+def detail_select(column, field, options):
+    column.multiselect(
+        op.FIELD_NAMES[field].capitalize(), options[field], key=PREFIX + field, help=HELP[field],
+        placeholder="Vyberte", format_func=pr.formatter(field), on_change=forget_demo,
+    )
 
-    if submitted:
-        cve_id = st.session_state["cve_id"].strip().upper()
-        description = st.session_state["description"].strip()
-        cwe_ids = st.session_state["cwe_ids"]
-        existing = op.load_records()
 
-        if not description:
-            st.error("Vyplňte popis zraniteľnosti.")
-        elif cve_id and not re.fullmatch(r"CVE-\d{4}-\d{4,}", cve_id):
-            st.error("CVE-ID musí mať tvar CVE-RRRR-ČÍSLO, napríklad CVE-2026-12345.")
-        elif cve_id and cve_id in set(existing["cve_id"]):
-            st.error(f"Záznam {cve_id} už existuje. Ak ho chcete zmeniť, najprv ho vymažte na záložke Pridané záznamy.")
+def incident_form(options):
+    buttons = st.columns(2)
+    buttons[0].button("Náhodný incident", icon=":material/casino:", on_click=fill_random_incident, width="stretch",
+                      help="Vyplní formulár incidentom z testovacej časti dát, ktorý model pri učení nevidel.")
+    buttons[1].button("Vyčistiť formulár", icon=":material/restart_alt:", on_click=clear_form, width="stretch")
+
+    demo = st.session_state.get("demo")
+    if demo:
+        year = f" z roku {demo['rok']}" if demo["rok"] else ""
+        st.html(f'<div class="rk-demo">🎲<div><b>Testovací incident č. {demo["zaznam_id"]}{year}.</b> '
+                'Skutočný dopad uvidíte po vyhodnotení.</div></div>')
+        if demo["popis"]:
+            with st.expander("Popis incidentu z VCDB (model ho nepoužíva)"):
+                st.write(demo["popis"])
+
+    with st.container(border=True):
+        step(1, "Povinné údaje")
+        st.selectbox("Odvetvie", options["odvetvie"], key=PREFIX + "odvetvie", index=None,
+                     placeholder="Vyberte odvetvie", on_change=forget_demo)
+        st.segmented_control("Veľkosť organizácie", options["velkost_organizacie"], key=PREFIX + "velkost_organizacie",
+                                format_func=str.capitalize, on_change=forget_demo, width="stretch")
+        st.pills("Typ aktéra", options["aktor_typy"], selection_mode="multi", key=PREFIX + "aktor_typy",
+                 format_func=pr.formatter("aktor_typy"), help=HELP["aktor_typy"], on_change=forget_demo)
+        st.pills("Typ útoku", options["akcia_typy"], selection_mode="multi", key=PREFIX + "akcia_typy",
+                 format_func=pr.formatter("akcia_typy"), help=HELP["akcia_typy"], on_change=forget_demo)
+
+    values = form_values()
+    defaults = op.default_input()
+    filled = sum(bool(values[field]) for field in op.DETAIL_COLUMNS) + sum(bool(values[field]) for field in CHECK_FIELDS) \
+        + sum(values[field] != defaults[field] for field in ["krajina", "cielenost"])
+    label = "Podrobnosti incidentu (nepovinné)" + (f" · vyplnené {filled}" if filled else "")
+    with st.expander(label, expanded=filled > 0, icon=":material/tune:"):
+        st.html('<div class="rk-hint">Čím viac údajov zadáte, tým presnejší je odhad. Neznáme polia nechajte prázdne.</div>')
+        left, right = st.columns(2)
+        countries = options["krajina"][:5] + sorted(options["krajina"][5:], key=pr.formatter("krajina"))
+        left.selectbox("Krajina", countries, key=PREFIX + "krajina", format_func=pr.formatter("krajina"), on_change=forget_demo)
+        right.segmented_control("Cielenosť útoku", options["cielenost"], key=PREFIX + "cielenost",
+                                format_func=str.capitalize, on_change=forget_demo, width="stretch")
+        for field_left, field_right in [("aktor_variety", "akcia_variety"), ("motiv", "akcia_vektory"),
+                                        ("aktivum_variety", "typy_dat")]:
+            detail_select(left, field_left, options)
+            detail_select(right, field_right, options)
+        detail_select(left, "sposob_odhalenia", options)
+        right.toggle("Narušená integrita", key=PREFIX + "atribut_integrity", on_change=forget_demo,
+                     help="Údaje alebo systém boli zmenené.")
+        right.toggle("Narušená dostupnosť", key=PREFIX + "atribut_availability", on_change=forget_demo,
+                     help="Údaje alebo služba neboli dostupné.")
+
+    row = op.to_row(model_input(form_values()))
+    pair = (row["odvetvie"], row["vzor_utoku"])
+    default = op.default_frequency(*pair)
+    if st.session_state.get("frekvencia_pre") != pair:
+        st.session_state["frekvencia"] = decimal(default, 4)
+        st.session_state["frekvencia_pre"] = pair
+
+    with st.container(border=True):
+        step(2, "Hodnotenie")
+        st.html(f'<div class="rk-hint">Vzor útoku podľa zadaných údajov: <b>{esc(row["vzor_utoku"])}</b>. '
+                f'Predvolená frekvencia pre odvetvie {esc(row["odvetvie"])}: <b>{decimal(default)}</b> incidentu ročne.</div>')
+        left, right = st.columns([1, 1.6])
+        left.text_input("Ročná frekvencia incidentov", key="frekvencia",
+                        help="Predvyplnená podielom vzoru v odvetví medzi reprezentatívnymi incidentmi pri jednom "
+                             "závažnom incidente ročne. Desatinné čísla píšte s čiarkou.")
+        right.text_input("Názov hodnotenia (nepovinné)", key=PREFIX + "nazov", max_chars=200,
+                         placeholder="napríklad Únik z e-shopu, marec 2026")
+        with st.container(key="evaluate"):
+            st.button("Vyhodnotiť riziko a uložiť", type="primary", icon=":material/shield:", width="stretch",
+                      on_click=evaluate)
+        for error in st.session_state.get("chyby", []):
+            st.error(error, icon=":material/error:")
+
+
+def new_assessment_tab():
+    options = op.choices()
+    init_form()
+    form_column, result_column = st.columns([1.08, 1], gap="large")
+    with form_column:
+        incident_form(options)
+    with result_column, st.container(key="result_panel"):
+        if "vysledok" in st.session_state:
+            with st.container(key="has_result"):
+                show_result(*st.session_state["vysledok"])
         else:
-            result = op.assess(bundle, description, cwe_ids)
-            op.add_record(cve_id, description, cwe_ids, result)
-            st.session_state["last_result"] = (cve_id or "Záznam bez CVE-ID", result)
+            empty_result()
 
-    if "last_result" in st.session_state:
-        name, result = st.session_state["last_result"]
-        st.divider()
-        show_result(result, f"Výsledok: {name}")
+
+def readable_input(raw):
+    incident = json.loads(raw)
+    lines = []
+    for field in SELECT_FIELDS + LIST_FIELDS:
+        value = incident.get(field)
+        if not value:
+            continue
+        values = value if isinstance(value, list) else [value]
+        lines.append(f"**{op.FIELD_NAMES[field].capitalize()}:** " + ", ".join(pr.label(field, item) for item in values))
+    flags = [text for field, text in [("atribut_integrity", "integrita"), ("atribut_availability", "dostupnosť")]
+             if incident.get(field)]
+    if flags:
+        lines.append("**Narušená:** " + ", ".join(flags))
+    return "  \n".join(lines)
 
 
 def records_tab():
-    records = op.load_records()
+    records = op.load_assessments()
     if records.empty:
-        st.info("Zatiaľ nie sú pridané žiadne záznamy. Pridajte prvý na záložke Nový záznam.")
+        st.html(f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Zatiaľ žiadne hodnotenia</h4>'
+                '<p>Pridajte prvé na záložke Nové hodnotenie alebo cez API.</p></div>')
         return
 
-    records = records.sort_values("ocakavane_denne_riziko", ascending=False).reset_index(drop=True)
-    records.insert(0, "priorita", records.index + 1)
-    st.caption("Záznamy sú zoradené podľa priority, teda od najvyššej očakávanej dennej škody.")
+    records.insert(0, "priorita", range(1, len(records) + 1))
+    known = records.dropna(subset=["skutocny_dopad"])
+    known = known[known["skutocny_dopad"].astype(str).str.len() > 0]
+    accuracy = (f"{percent((known['skutocny_dopad'] == known['predikovany_dopad']).mean())}",
+                f"z {len(known)} testovacích incidentov") if len(known) else ("–", "žiadne testovacie incidenty")
+    st.html(kpi_row([
+        ("Uložené hodnotenia", str(len(records)), f"databáza {esc(op.DB_PATH.name)}"),
+        ("Očakávaná strata spolu", euro(records["ocakavana_strata"].sum()), "ročne, pred opatreniami"),
+        ("Odporúčané opatrenia", euro(records["cena_opatrenia"].sum()), "ročná cena vrátane monitorovania"),
+        ("Zhoda so skutočným dopadom", *accuracy),
+    ]))
+    st.caption("Zoradené od najvyššej očakávanej ročnej straty. Priorita je poradie riešenia.")
 
+    shown = records.drop(columns="vstup").copy()
+    shown["vytvorene"] = shown["vytvorene"].map(date_time)
+    shown["skutocny_dopad"] = shown["skutocny_dopad"].fillna("–").replace("", "–")
+    styled = shown.style.format({
+        "ocakavana_strata": euro, "cena_opatrenia": euro, "cisty_prinos": euro,
+        "p_nizky": percent, "p_stredny": percent, "p_vysoky": percent,
+        "frekvencia": lambda value: decimal(value),
+    })
     st.dataframe(
-        records.drop(columns="zaznam_id"),
-        hide_index=True,
-        width="stretch",
+        styled, hide_index=True, width="stretch",
         column_order=[
-            "priorita", "cve_id", "opatrenie", "ocakavane_denne_riziko",
-            *[f"P_{label}" for label in op.LABELS],
-            "cwe_text", "description", "pridane",
+            "priorita", "id", "nazov", "odvetvie", "vzor_utoku", "opatrenie", "ocakavana_strata",
+            "predikovany_dopad", "skutocny_dopad", "p_nizky", "p_stredny", "p_vysoky", "frekvencia",
+            "opatrenia_cis", "cena_opatrenia", "cisty_prinos", "zdroj", "vytvorene",
         ],
         column_config={
-            "pridane": "pridané",
-            "cve_id": "CVE-ID",
-            "description": st.column_config.TextColumn("popis", width="medium"),
-            "cwe_text": "CWE",
-            "ocakavane_denne_riziko": st.column_config.NumberColumn("denná škoda (€)", format="%.2f"),
-            **{f"P_{label}": st.column_config.NumberColumn(f"P({label})", format="%.2f") for label in op.LABELS},
+            "priorita": st.column_config.NumberColumn("Priorita", width="small"),
+            "id": st.column_config.NumberColumn("Č.", width="small"),
+            "nazov": "Názov", "odvetvie": "Odvetvie", "vzor_utoku": "Vzor útoku", "opatrenie": "Opatrenie",
+            "ocakavana_strata": "Očakávaná strata", "predikovany_dopad": "Predikovaný dopad",
+            "skutocny_dopad": "Skutočný dopad", "p_nizky": "P(nízky)", "p_stredny": "P(stredný)", "p_vysoky": "P(vysoký)",
+            "frekvencia": "Frekvencia", "opatrenia_cis": "Opatrenia CIS", "cena_opatrenia": "Cena opatrenia",
+            "cisty_prinos": "Čistý prínos", "zdroj": "Zdroj", "vytvorene": "Vytvorené",
         },
     )
 
-    st.download_button(
-        "Stiahnuť ako CSV",
-        records.drop(columns="zaznam_id").to_csv(index=False).encode("utf-8-sig"),
-        file_name="pridane_zaznamy.csv",
-        mime="text/csv",
-    )
-
-    labels = {
-        row.zaznam_id: f"{row.priorita}. {row.cve_id or 'bez CVE-ID'}: {row.description[:60]}"
-        for row in records.itertuples()
-    }
-    with st.form("delete_records"):
-        to_delete = st.multiselect("Vymazať záznamy", list(labels), format_func=labels.get, placeholder="Vyberte záznamy")
-        if st.form_submit_button("Vymazať vybrané") and to_delete:
-            op.delete_records(to_delete)
-            st.rerun()
-
-
-def overview_tab():
-    if not op.TEST_RESULTS_PATH.exists():
-        st.info("Výsledky zatiaľ neexistujú. Spustite notebook preskriptivna_udrzba.ipynb.")
-        return
-
-    results = get_test_results()
-    st.caption("Zraniteľnosti z rokov 2020 a 2021, na ktorých bol postup vyhodnotený v notebooku.")
-
-    columns = st.columns(len(op.ACTION_NAMES))
-    for column, action in zip(columns, op.ACTION_NAMES):
-        count = int((results["opatrenie"] == action).sum())
-        column.metric(action, f"{count:,}".replace(",", " "), percent(count / len(results)), delta_color="off", delta_arrow="off")
-
-    filter_action, filter_severity, search = st.columns(3)
-    actions = filter_action.multiselect("Opatrenie", op.ACTION_NAMES, placeholder="Všetky")
-    severities = filter_severity.multiselect("Skutočná závažnosť", op.LABELS, placeholder="Všetky")
-    query = search.text_input("Hľadať CVE-ID alebo CWE", placeholder="CVE-2021-, CWE-79")
-
-    shown = results
-    if actions:
-        shown = shown[shown["opatrenie"].isin(actions)]
-    if severities:
-        shown = shown[shown["severity_v3"].isin(severities)]
-    if query.strip():
-        needle = query.strip()
-        shown = shown[
-            shown["cve_id"].str.contains(needle, case=False, regex=False)
-            | shown["cwe_text"].str.contains(needle, case=False, regex=False)
-        ]
-
-    st.markdown(f"Zobrazených záznamov: **{len(shown):,}**".replace(",", " "))
-    st.dataframe(
-        shown,
-        hide_index=True,
-        width="stretch",
-        height=380,
-        column_config={
-            "cve_id": "CVE-ID",
-            "year": st.column_config.NumberColumn("rok", format="%d"),
-            "severity_v3": "skutočná závažnosť",
-            "cwe_text": "CWE",
-            "P_CRITICAL": st.column_config.NumberColumn("P(CRITICAL)", format="%.2f"),
-            "ocakavane_denne_riziko": st.column_config.NumberColumn("denná škoda (€)", format="%.2f"),
-        },
-    )
-
-    for name in ["9_porovnanie_strategii.png", "8_opatrenia_podla_zavaznosti.png", "7_prahy_opatreni.png"]:
-        path = op.FIGURES_DIR / name
-        if path.exists():
-            st.image(str(path), width=900)
-
-
-def utc_label(value):
-    return f"{value.replace('T', ' ')[:16]} UTC" if value else "zatiaľ nie"
-
-
-def show_model_report():
-    if not op.PRODUCTION_REPORT_PATH.exists():
-        return
-    report = json.loads(op.PRODUCTION_REPORT_PATH.read_text(encoding="utf-8"))
-    with st.expander(f"Prevádzkový model, naučený {report['natrenovane']}"):
-        names = {
-            "novy_model": "Nový model",
-            "novy_model_iba_hodnotenie_nvd": "Nový model, iba hodnotenia NVD",
-            "novy_model_iba_hodnotenie_cna": "Nový model, iba hodnotenia CNA",
-            "povodny_model_do_2018": "Pôvodný model z notebooku",
+    left, right = st.columns([1.3, 1], gap="large")
+    with left:
+        with st.expander("Vstup hodnotenia", icon=":material/description:"):
+            chosen = st.selectbox("Hodnotenie", records["id"], format_func=lambda value: f"č. {value}")
+            st.markdown(readable_input(records.loc[records["id"] == chosen, "vstup"].iloc[0]))
+        st.download_button("Stiahnuť ako CSV", records.to_csv(index=False).encode("utf-8-sig"), file_name="hodnotenia.csv",
+                           mime="text/csv", icon=":material/download:")
+    with right:
+        labels = {
+            row.id: f"{row.priorita}. č. {row.id}{' ' + row.nazov if row.nazov else ''} "
+                    f"({row.odvetvie}, {row.vzor_utoku}, {euro(row.ocakavana_strata)})"
+            for row in records.itertuples()
         }
-        rows = [{"model": label, **report[key]} for key, label in names.items() if key in report]
-        table = pd.DataFrame(rows).drop(columns="opatrenia_podiel")
-        st.caption(f"Vyhodnotenie na zraniteľnostiach zverejnených od {report['testovacie_obdobie_od']}.")
-        st.dataframe(table.round(3), hide_index=True, width="stretch")
+        with st.expander("Vymazať hodnotenia", icon=":material/delete:"):
+            with st.form("delete_records", border=False):
+                to_delete = st.multiselect("Hodnotenia na vymazanie", list(labels), format_func=labels.get,
+                                           placeholder="Vyberte hodnotenia")
+                delete_all = st.checkbox("Vymazať všetky hodnotenia")
+                if st.form_submit_button("Vymazať", icon=":material/delete:"):
+                    ids = list(labels) if delete_all else to_delete
+                    if ids:
+                        op.delete_assessments(ids)
+                        st.session_state.pop("vysledok", None)
+                        st.rerun()
 
 
-@st.fragment(run_every="20s")
-def live_tab():
-    status = prevadzka.read_status()
-    if not status or "last_attempt" not in status:
-        st.info("Prevádzka zatiaľ nebežala. Spustite ju príkazom docker compose up -d.")
-        return
+def register_tab():
+    register = op.load_register()
+    worthwhile = register[register["opatrenie"] != op.OPTION_NAMES[0]]
+    st.html(kpi_row([
+        ("Scenáre s opatrením", f"{len(worthwhile)} z {len(register)}", "6 odvetví × 8 vzorov útokov"),
+        ("Cena odporúčaných opatrení", euro(worthwhile["cena opatrenia (€)"].sum() - op.MONITORING_COST * len(worthwhile)),
+         "ročne, bez monitorovania"),
+        ("Čistý prínos spolu", euro(register["čistý prínos (€)"].sum()), "ročne oproti nečinnosti"),
+    ]))
 
-    records = prevadzka.read_records()
-    last_success = status.get("last_success", "")
-    interval = int(status.get("poll_seconds", prevadzka.POLL_SECONDS))
-    silent = not last_success or (
-        pd.Timestamp.now("UTC") - pd.Timestamp(last_success, tz="UTC")
-    ).total_seconds() > 2 * interval + 300
+    st.html('<div class="rk-section">Mapa rizík</div><div class="rk-note">Farba je odporúčané opatrenie, číslo očakávaná '
+            'ročná strata scenára. Podrobnosti ukáže kurzor nad bunkou.</div>')
+    st.altair_chart(register_chart(register), width="stretch")
 
-    if status.get("last_error"):
-        st.warning(f"Posledné načítanie z NVD zlyhalo, prevádzka to skúsi znova. {status['last_error']}")
-    elif silent:
-        st.warning("Prevádzka sa dlhšie neozvala. Skontrolujte kontajner príkazom docker compose logs worker.")
-
-    published = pd.to_datetime(records["published"], utc=True) if len(records) else pd.Series(dtype="datetime64[ns, UTC]")
-    last_day = int((published >= pd.Timestamp.now("UTC") - pd.Timedelta(hours=24)).sum())
-    first, second, third = st.columns(3)
-    first.metric("Posledné úspešné načítanie", utc_label(last_success))
-    second.metric("Zverejnené za 24 hodín", f"{last_day:,}".replace(",", " "))
-    third.metric("Spracované spolu", f"{len(records):,}".replace(",", " "))
-    st.caption(f"NVD sa kontroluje každých {decimal(interval / 60, 0)} min. Stránka sa obnovuje sama. Model: {status.get('model', '')}.")
-
-    if records.empty:
-        st.info("Zatiaľ nie sú spracované žiadne zraniteľnosti.")
-        return
-
-    columns = st.columns(len(op.ACTION_NAMES))
-    for column, action in zip(columns, op.ACTION_NAMES):
-        count = int((records["action"] == action).sum())
-        column.metric(action, f"{count:,}".replace(",", " "), percent(count / len(records)), delta_color="off", delta_arrow="off")
-
-    scored = records[records["actual_severity"].isin(op.LABELS)]
-    if len(scored):
-        critical = scored[scored["actual_severity"] == "CRITICAL"]
-        recall = (critical["predicted_class"] == "CRITICAL").mean() if len(critical) else None
-        st.markdown(
-            f"**Kontrola presnosti:** z {len(scored):,} záznamov, ktoré už majú skóre CVSS, model určil správnu triedu pri "
-            f"{percent((scored['predicted_class'] == scored['actual_severity']).mean())}".replace(",", " ", 1)
-            + (f" a zachytil {percent(recall)} kritických." if recall is not None else ".")
-        )
-
-    actions = st.multiselect("Opatrenie", op.ACTION_NAMES, placeholder="Všetky", key="live_actions")
-    shown = records[records["action"].isin(actions)] if actions else records
+    st.html('<div class="rk-section">Register rizík</div><div class="rk-note">Priorita je poradie zavádzania podľa čistého '
+            'prínosu na každé investované euro. Scenáre bez opatrenia nemajú prioritu.</div>')
+    sectors = st.pills("Odvetvie", list(dict.fromkeys(register["odvetvie"])), selection_mode="multi",
+                       label_visibility="collapsed")
+    shown = register[register["odvetvie"].isin(sectors)] if sectors else register
+    money = {column: euro for column in ["očakávaná strata (€)", "cena opatrenia (€)", "zostávajúca strata (€)", "čistý prínos (€)"]}
+    styled = shown.style.format({
+        **money,
+        "frekvencia za rok": lambda value: decimal(value),
+        "P(vysoký dopad)": percent,
+        "priorita": lambda value: "–" if pd.isna(value) else f"{value:.0f}",
+    })
     st.dataframe(
-        shown.head(500),
-        hide_index=True,
-        width="stretch",
-        height=420,
+        styled, hide_index=True, width="stretch", height=420,
         column_order=[
-            "published", "cve_id", "action", "predicted_class", "actual_severity",
-            "p_critical", "expected_risk", "cwe_text", "description",
+            "priorita", "odvetvie", "vzor_utoku", "frekvencia za rok", "P(vysoký dopad)", "očakávaná strata (€)",
+            "opatrenie", "opatrenia CIS", "cena opatrenia (€)", "zostávajúca strata (€)", "čistý prínos (€)",
+            "odhad dopadu z", "incidenty v odhade",
         ],
         column_config={
-            "published": "zverejnené (UTC)",
-            "cve_id": "CVE-ID",
-            "action": "opatrenie",
-            "predicted_class": "predikcia",
-            "actual_severity": "skutočná závažnosť",
-            "p_critical": st.column_config.NumberColumn("P(CRITICAL)", format="%.2f"),
-            "expected_risk": st.column_config.NumberColumn("denná škoda (€)", format="%.2f"),
-            "cwe_text": "CWE",
-            "description": st.column_config.TextColumn("popis", width="large"),
+            "priorita": "Priorita", "odvetvie": "Odvetvie", "vzor_utoku": "Vzor útoku", "frekvencia za rok": "Frekvencia za rok",
+            "očakávaná strata (€)": "Očakávaná strata", "opatrenie": "Opatrenie", "opatrenia CIS": "Opatrenia CIS",
+            "cena opatrenia (€)": "Cena opatrenia", "zostávajúca strata (€)": "Zostávajúca strata",
+            "čistý prínos (€)": "Čistý prínos", "odhad dopadu z": "Odhad dopadu z", "incidenty v odhade": "Incidenty v odhade",
         },
     )
-    show_model_report()
+
+    figures = [("Register rizík", "7_register_rizik.png"), ("Rozpočet", "8_rozpocet.png"),
+               ("Porovnanie stratégií", "9_porovnanie_strategii_rizik.png")]
+    figures = [(title, op.FIGURES_DIR / name) for title, name in figures if (op.FIGURES_DIR / name).exists()]
+    if figures:
+        st.html('<div class="rk-section">Grafy z notebooku preskriptivna_udrzba.ipynb</div>')
+        for tab, (_, path) in zip(st.tabs([title for title, _ in figures]), figures):
+            tab.image(str(path), width="stretch")
 
 
 def assumptions_tab():
     st.warning(
-        "Dataset neobsahuje náklady, časy ani skutočné zneužitia. Hodnoty nižšie sú predpoklady pre "
-        "modelovú organizáciu a pri reálnom použití ich treba nahradiť jej údajmi."
+        "Dataset neobsahuje ceny ani účinnosť opatrení. Hodnoty nižšie sú predpoklady pre modelovú organizáciu "
+        "z notebooku preskriptivna_udrzba.ipynb a pri skutočnom použití ich treba nahradiť údajmi organizácie.",
+        icon=":material/info:",
     )
-    st.markdown(f"**Hodinová sadzba:** {op.HOURLY_RATE} €. **Riziko po nasadení dočasnej ochrany:** {percent(op.PROTECTION_RESIDUAL)}.")
+    st.html(kpi_row([
+        ("Horizont", f"{op.HORIZON_YEARS} roky", "opatrenie chráni len po zavedení"),
+        ("Závažné incidenty za rok", decimal(op.INCIDENTS_PER_YEAR, 1), "rozdelené podľa podielu vzoru v odvetví"),
+        ("Monitorovanie", euro(op.MONITORING_COST), "ročne, vždy"),
+    ]))
 
-    st.markdown("**Opatrenia**")
-    st.dataframe(op.ACTION_ASSUMPTIONS.assign(**{"náklady na prácu (€)": op.COST, "efektívne dni expozície": op.EXPOSURE}), width="stretch")
-    st.markdown("**Triedy závažnosti**")
-    st.dataframe(op.SEVERITY_ASSUMPTIONS.assign(**{"denná očakávaná škoda (€)": op.DAILY_RISK.round(2)}), width="stretch")
-    st.markdown("**Prahy pre zmenu opatrenia**")
-    st.dataframe(op.thresholds().round(2), hide_index=True, width="stretch")
+    left, right = st.columns(2, gap="large")
+    with left:
+        st.html('<div class="rk-section">Strata z jedného incidentu podľa dopadu</div>')
+        loss = op.LOSS.rename("strata").to_frame()
+        st.dataframe(loss.style.format({"strata": euro}), width="stretch",
+                     column_config={"_index": "Dopad", "strata": "Strata z incidentu"})
+    with right:
+        st.html('<div class="rk-section">Ročná cena jedného opatrenia CIS podľa typu</div>')
+        cost = pd.Series(op.CONTROL_COST, name="cena").to_frame()
+        st.dataframe(cost.style.format({"cena": euro}), width="stretch",
+                     column_config={"_index": "Typ opatrenia", "cena": "Ročná cena"})
+
+    st.html('<div class="rk-section">Typy opatrení</div>')
+    options = op.OPTIONS.copy()
+    options["chráni časť horizontu"] = (12 * op.HORIZON_YEARS - op.OPTIONS["mesiace zavedenia"]) / (12 * op.HORIZON_YEARS)
+    st.dataframe(
+        options.style.format({"menej incidentov": percent, "menšia strata": percent, "chráni časť horizontu": percent,
+                              "mesiace zavedenia": lambda value: f"{value:.0f}"}),
+        width="stretch",
+        column_config={"_index": "Opatrenie", "menej incidentov": "Menej incidentov", "menšia strata": "Menšia strata",
+                       "mesiace zavedenia": "Mesiace zavedenia", "chráni časť horizontu": "Chráni časť horizontu"},
+    )
+
+    st.html('<div class="rk-section">Výpočet</div>')
+    st.code(
+        "očakávaná strata = frekvencia × Σ P(dopad) × strata(dopad)\n"
+        "celkové náklady(a) = cena(a) + očakávaná strata × (1 − menej_incidentov(a) × f) × (1 − menšia_strata(a) × f)\n"
+        "f = (36 − mesiace_zavedenia(a)) / 36\n"
+        "odporúčané opatrenie = to s najnižšími celkovými nákladmi",
+        language=None,
+    )
+
+    st.html('<div class="rk-section">Ročná cena opatrení podľa vzoru útoku</div>')
+    costs = op.cost_table()
+    money = [column for column in costs.columns if column.endswith("(€)")]
+    st.dataframe(costs.style.format({column: euro for column in money}), hide_index=True, width="stretch",
+                 column_config={**{column: column.replace(" (€)", "") for column in money},
+                                "vzor útoku": "Vzor útoku", "prevencia": "CIS: prevencia",
+                                "detekcia a reakcia": "CIS: detekcia a reakcia"})
+
+    st.html('<div class="rk-section">Prahy: od akej očakávanej ročnej straty sa opatrenie oplatí</div>')
+    thresholds = op.thresholds()
+    money = [column for column in thresholds.columns if column.endswith("(€)")]
+    st.dataframe(
+        thresholds.style.format({column: euro for column in money}, na_rep="–"),
+        hide_index=True, width="stretch",
+        column_config={column: column.replace(" (€)", "").capitalize() for column in thresholds.columns},
+    )
+    st.caption("Pomlčka znamená, že pri tomto vzore je vždy výhodnejšie iné opatrenie.")
 
 
-st.title("Opatrenia pre zraniteľnosti")
-st.write("Pridajte zraniteľnosť a model odhadne jej závažnosť a odporučí opatrenie podľa rizika, nákladov a času.")
+# ---------------------------------------------------------------- stránka
 
-if not op.active_model_path().exists() and not op.DATA_PATH.exists():
-    st.error("Chýbajú vyčistené dáta. Najprv spustite notebook priprava_dat.ipynb.")
+st.html(CSS.replace("SHIELD_SVG", SHIELD_SVG))
+st.html(
+    f'<div class="rk-header"><div class="rk-logo">{SHIELD}</div><div>'
+    '<div class="rk-title">Hodnotenie rizika bezpečnostných incidentov</div>'
+    '<div class="rk-subtitle">Zadajte incident tak, ako ho poznáte hneď po odhalení. Model odhadne jeho dopad '
+    'a aplikácia odporučí opatrenie podľa rizika, nákladov a času zavedenia.</div>'
+    '<div class="rk-chips"><span class="rk-chip">VCDB · VERIS</span><span class="rk-chip">LightGBM</span>'
+    '<span class="rk-chip">CIS Controls v8</span></div></div></div>'
+)
+
+missing = op.missing_files()
+if missing:
+    st.error(f"Chýbajú súbory {', '.join(path.name for path in missing)}. Najprv spustite notebooky podľa README.md.")
     st.stop()
 
-bundle = active_bundle()
+load_context()
 
-tab_new, tab_live, tab_records, tab_overview, tab_assumptions = st.tabs(
-    ["Nový záznam", "Živá prevádzka", "Pridané záznamy", "Výsledky na testovacích dátach", "Predpoklady"]
+tab_new, tab_records, tab_register, tab_assumptions = st.tabs(
+    ["Nové hodnotenie", "Uložené hodnotenia", "Register rizík", "Predpoklady"]
 )
 with tab_new:
-    new_record_tab(bundle)
-with tab_live:
-    live_tab()
+    new_assessment_tab()
 with tab_records:
     records_tab()
-with tab_overview:
-    overview_tab()
+with tab_register:
+    register_tab()
 with tab_assumptions:
     assumptions_tab()
