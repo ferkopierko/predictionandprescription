@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -29,6 +30,21 @@ OPTION_COLORS = dict(zip(op.OPTION_NAMES, ["#94A3B8", "#4A6EEB", "#8B5CF6", "#14
 COST_COLOR = "#4A6EEB"
 RESIDUAL_COLOR = "#A9B4C6"
 LABEL_COLOR = "#7A8599"
+BUDGET_COLORS = {op.BUDGET_ORDERS[0]: COST_COLOR, op.BUDGET_ORDERS[1]: RESIDUAL_COLOR}
+
+# Slovenský formát čísel (548 250 €, 0,34) a dátumov v grafoch Altair
+SK_LOCALE = alt.Locale(
+    number=alt.NumberLocale(decimal=",", thousands=" ", grouping=[3], currency=["", " €"]),
+    time=alt.TimeLocale(
+        dateTime="%A %-d. %B %Y %H:%M:%S", date="%-d. %-m. %Y", time="%H:%M:%S", periods=["", ""],
+        days=["nedeľa", "pondelok", "utorok", "streda", "štvrtok", "piatok", "sobota"],
+        shortDays=["ne", "po", "ut", "st", "št", "pi", "so"],
+        months=["január", "február", "marec", "apríl", "máj", "jún", "júl", "august", "september", "október",
+                "november", "december"],
+        shortMonths=["jan", "feb", "mar", "apr", "máj", "jún", "júl", "aug", "sep", "okt", "nov", "dec"],
+    ),
+)
+AXIS_FONT = 13
 
 HELP = {
     "aktor_typy": "Kto incident spôsobil. Ak to neviete, vyberte Neznámy.",
@@ -378,6 +394,7 @@ def register_chart(register):
     frame["P"] = frame["P(vysoký dopad)"].map(percent)
     frame["cena"] = frame["cena opatrenia (€)"].map(euro)
     frame["prínos"] = frame["čistý prínos (€)"].map(euro)
+    frame["frekvencia"] = frame["frekvencia za rok"].map(lambda value: decimal(value))
     sectors = list(dict.fromkeys(frame.sort_values("odvetvie")["odvetvie"]))
     base = alt.Chart(frame).encode(
         x=alt.X("odvetvie:N", sort=sectors, title=None, scale=alt.Scale(paddingInner=0.05),
@@ -389,13 +406,193 @@ def register_chart(register):
         color=alt.Color("opatrenie:N", scale=alt.Scale(domain=list(OPTION_COLORS), range=list(OPTION_COLORS.values())),
                         legend=alt.Legend(orient="bottom", title=None, labelFontSize=12, columns=4, symbolType="square")),
         tooltip=[
-            alt.Tooltip("odvetvie:N"), alt.Tooltip("vzor_utoku:N", title="vzor útoku"), alt.Tooltip("opatrenie:N"),
-            alt.Tooltip("strata:N", title="očakávaná strata"), alt.Tooltip("P:N", title="P(vysoký dopad)"),
-            alt.Tooltip("cena:N", title="cena opatrenia"), alt.Tooltip("prínos:N", title="čistý prínos"),
+            alt.Tooltip("odvetvie:N"), alt.Tooltip("vzor_utoku:N", title="vzor útoku"),
+            alt.Tooltip("frekvencia:N", title="frekvencia za rok"), alt.Tooltip("P:N", title="P(vysoký dopad)"),
+            alt.Tooltip("strata:N", title="očakávaná strata"), alt.Tooltip("opatrenie:N"),
+            alt.Tooltip("opatrenia CIS:N", title="opatrenia CIS"), alt.Tooltip("cena:N", title="cena opatrenia"),
+            alt.Tooltip("prínos:N", title="čistý prínos"),
         ],
     )
     text = base.mark_text(fontSize=12, fontWeight=600, color="#ffffff").encode(text="strata:N")
-    return (cells + text).properties(height=430).configure_view(stroke=None)
+    return finish((cells + text).properties(height=430))
+
+
+def finish(chart):
+    """Spoločný vzhľad grafov: slovenský formát, väčšie popisy, bez rámčeka."""
+    return (
+        chart.configure(locale=SK_LOCALE)
+        .configure_view(stroke=None)
+        .configure_axis(labelFontSize=AXIS_FONT, titleFontSize=AXIS_FONT, titleFontWeight=500, titlePadding=10)
+        .configure_legend(labelFontSize=AXIS_FONT, symbolSize=140)
+    )
+
+
+def budget_chart(curves, budget):
+    """Krivka zníženej straty podľa rozpočtu pre obe poradia a bod pre zvolený rozpočet."""
+    rows, marks = [], []
+    for name, steps in curves.items():
+        rows.append({"poradie": name, "rozpočet": 0.0, "strata": 0.0, "scenár": "–", "opatrenie": "–", "krok": 0})
+        rows += [
+            {"poradie": name, "rozpočet": row["rozpočet (€)"], "strata": row["znížená strata spolu (€)"],
+             "scenár": f'{row["odvetvie"]}: {row["vzor_utoku"]}', "opatrenie": row["opatrenie"], "krok": row["poradie"]}
+            for _, row in steps.iterrows()
+        ]
+        covered, reduced = op.budget_coverage(budget, name)
+        marks.append({"poradie": name, "rozpočet": budget, "strata": reduced, "text": euro(reduced),
+                      "scenáre": len(covered), "vyššie": None})
+    frame = pd.DataFrame(rows)
+    frame["rozpočet text"] = frame["rozpočet"].map(euro)
+    frame["strata text"] = frame["strata"].map(euro)
+    marks = pd.DataFrame(marks)
+    # Vyšší bod má popis nad sebou, nižší pod sebou, aby sa pri blízkych hodnotách neprekrývali
+    marks["vyššie"] = marks["strata"] >= marks["strata"].max()
+    top = frame["strata"].max() * 1.08
+    scale = alt.Scale(domain=list(BUDGET_COLORS), range=list(BUDGET_COLORS.values()))
+    color = alt.Color("poradie:N", scale=scale, legend=alt.Legend(orient="bottom", title=None, direction="horizontal"))
+    x = alt.X("rozpočet:Q", title="Ročný rozpočet na opatrenia (€)",
+              scale=alt.Scale(domain=[0, frame["rozpočet"].max()], nice=False),
+              axis=alt.Axis(format=",.0f", tickCount=6, labelFlush=True))
+    y = alt.Y("strata:Q", title="Znížená strata pri skutočnom dopade (€ za rok)", scale=alt.Scale(domain=[0, top]),
+              axis=alt.Axis(format=",.0f", tickCount=6))
+    line = alt.Chart(frame).mark_line(interpolate="step-after", strokeWidth=3).encode(x=x, y=y, color=color)
+    steps = alt.Chart(frame[frame["krok"] > 0]).mark_circle(size=55, opacity=0.9).encode(
+        x=x, y=y, color=alt.Color("poradie:N", scale=scale, legend=None),
+        tooltip=[alt.Tooltip("poradie:N"), alt.Tooltip("krok:Q", title="krok"), alt.Tooltip("scenár:N"),
+                 alt.Tooltip("opatrenie:N"), alt.Tooltip("rozpočet text:N", title="rozpočet spolu"),
+                 alt.Tooltip("strata text:N", title="znížená strata spolu")],
+    )
+    rule = alt.Chart(pd.DataFrame({"rozpočet": [budget]})).mark_rule(strokeDash=[6, 4], color=LABEL_COLOR, strokeWidth=1.5) \
+        .encode(x="rozpočet:Q")
+    points = alt.Chart(marks).mark_point(size=260, filled=True, stroke="#ffffff", strokeWidth=2, opacity=1).encode(
+        x=x, y=y, color=alt.Color("poradie:N", scale=scale, legend=None),
+        tooltip=[alt.Tooltip("poradie:N"), alt.Tooltip("text:N", title="znížená strata"),
+                 alt.Tooltip("scenáre:Q", title="pokryté scenáre")],
+    )
+    labels = [
+        alt.Chart(marks[marks["vyššie"] == upper]).mark_text(align="left", dx=12, dy=-14 if upper else 16, fontSize=13,
+                                                            fontWeight=700)
+        .encode(x=x, y=y, text="text:N", color=alt.Color("poradie:N", scale=scale, legend=None))
+        for upper in (True, False)
+    ]
+    return finish(alt.layer(line, steps, rule, points, *labels).properties(height=420))
+
+
+def strategy_chart(strategies):
+    """Vodorovné stĺpce ročných nákladov stratégií na organizáciu, naše riešenie zvýraznené."""
+    frame = strategies.copy()
+    frame["text"] = frame["na organizáciu (€)"].map(euro)
+    frame["spolu"] = frame["ročné náklady spolu (€)"].map(euro)
+    frame["skupina"] = np.where(frame["naša"], "naše riešenie", "ostatné stratégie")
+    order = list(frame["stratégia"])
+    y = alt.Y("stratégia:N", sort=order, title=None,
+              axis=alt.Axis(ticks=False, domain=False, labelLimit=360, labelPadding=8))
+    x = alt.X("na organizáciu (€):Q", title=None, axis=None,
+              scale=alt.Scale(domain=[0, frame["na organizáciu (€)"].max() * 1.2]))
+    tooltip = [alt.Tooltip("stratégia:N"), alt.Tooltip("text:N", title="na organizáciu za rok"),
+               alt.Tooltip("spolu:N", title="spolu za 6 organizácií")]
+    bars = alt.Chart(frame).mark_bar(height=22, cornerRadiusEnd=4).encode(
+        y=y, x=x, tooltip=tooltip,
+        color=alt.Color("skupina:N", scale=alt.Scale(domain=["naše riešenie", "ostatné stratégie"],
+                                                     range=[COST_COLOR, RESIDUAL_COLOR]), legend=None),
+    )
+    labels = alt.Chart(frame[~frame["naša"]]).mark_text(align="left", dx=6, fontSize=13, fontWeight=500,
+                                                       color=LABEL_COLOR).encode(y=y, x=x, text="text:N")
+    ours = alt.Chart(frame[frame["naša"]]).mark_text(align="left", dx=6, fontSize=14, fontWeight=700,
+                                                     color=COST_COLOR).encode(y=y, x=x, text="text:N")
+    return finish((bars + labels + ours).properties(height=38 * len(frame)))
+
+
+def _time_axis(times):
+    """Os času: hodiny v rámci dňa, inak jedna značka na deň, týždeň alebo mesiac, aby sa dátum neopakoval."""
+    span = times.max() - times.min()
+    if span < pd.Timedelta(hours=20):
+        return alt.Axis(format="%H:%M", labelFlush=True, tickCount=6)
+    if span < pd.Timedelta(days=14):
+        interval = {"interval": "day", "step": 1}
+    elif span < pd.Timedelta(days=90):
+        interval = {"interval": "week", "step": 1}
+    else:
+        return alt.Axis(format="%-m. %Y", labelFlush=True, tickCount={"interval": "month", "step": 1})
+    return alt.Axis(format="%-d. %-m.", labelFlush=True, tickCount=interval)
+
+
+def _padded(timeline, columns):
+    """Pridá nulový bod pred prvé a posledný stav za posledné hodnotenie, aby bol vidieť aj jediný záznam."""
+    times = timeline["čas"]
+    pad = max((times.max() - times.min()) * 0.04, pd.Timedelta(minutes=1))
+    start = {column: 0 for column in columns} | {"čas": times.min() - pad}
+    end = timeline.iloc[-1][columns].to_dict() | {"čas": times.max() + pad}
+    return pd.concat([pd.DataFrame([start]), timeline[["čas", *columns]], pd.DataFrame([end])], ignore_index=True)
+
+
+def impact_timeline_chart(timeline):
+    """Kumulatívny počet hodnotení v čase podľa predikovaného dopadu."""
+    columns = [f"počet {label}" for label in op.LABELS]
+    frame = _padded(timeline, columns).melt("čas", columns, var_name="dopad", value_name="počet")
+    frame["dopad"] = frame["dopad"].str.removeprefix("počet ")
+    frame["čas text"] = frame["čas"].dt.strftime("%-d. %-m. %Y %H:%M")
+    x = alt.X("čas:T", title=None, axis=_time_axis(timeline["čas"]))
+    area = alt.Chart(frame).mark_area(interpolate="step-after", opacity=0.88).encode(
+        x=x,
+        y=alt.Y("počet:Q", stack="zero", title="Počet hodnotení spolu", axis=alt.Axis(format="d", tickMinStep=1)),
+        color=alt.Color("dopad:N", sort=op.LABELS, scale=alt.Scale(domain=list(IMPACT_COLORS), range=list(IMPACT_COLORS.values())),
+                        legend=alt.Legend(orient="bottom", title="Predikovaný dopad", direction="horizontal")),
+        order=alt.Order("poradie:Q"),
+        tooltip=[alt.Tooltip("dopad:N"), alt.Tooltip("počet:Q", title="počet do tohto času"), alt.Tooltip("čas text:N", title="čas")],
+    ).transform_calculate(poradie="indexof(['nízky', 'stredný', 'vysoký'], datum.dopad)")
+    return finish(area.properties(height=300))
+
+
+def loss_timeline_chart(timeline):
+    """Kumulatívna očakávaná ročná strata uložených hodnotení v čase."""
+    frame = _padded(timeline, ["strata spolu (€)", "počet spolu"])
+    frame["text"] = frame["strata spolu (€)"].map(euro)
+    frame["čas text"] = frame["čas"].dt.strftime("%-d. %-m. %Y %H:%M")
+    x = alt.X("čas:T", title=None, axis=_time_axis(timeline["čas"]))
+    y = alt.Y("strata spolu (€):Q", title="Očakávaná ročná strata spolu (€)", axis=alt.Axis(format=",.0f", tickCount=5))
+    area = alt.Chart(frame).mark_area(interpolate="step-after", color=COST_COLOR, opacity=0.18).encode(x=x, y=y)
+    line = alt.Chart(frame).mark_line(interpolate="step-after", color=COST_COLOR, strokeWidth=2.5).encode(x=x, y=y)
+    points = alt.Chart(frame.iloc[1:-1]).mark_circle(size=60, color=COST_COLOR).encode(
+        x=x, y=y, tooltip=[alt.Tooltip("čas text:N", title="čas"), alt.Tooltip("počet spolu:Q", title="hodnotení"),
+                           alt.Tooltip("text:N", title="strata spolu")],
+    )
+    return finish((area + line + points).properties(height=300))
+
+
+def options_chart(records):
+    """Koľkokrát bolo odporúčané každé opatrenie, v pevnom poradí a farbách opatrení."""
+    counts = records["opatrenie"].value_counts().reindex(op.OPTION_NAMES, fill_value=0)
+    frame = pd.DataFrame({"opatrenie": counts.index, "počet": counts.to_numpy()})
+    frame["podiel"] = (frame["počet"] / max(len(records), 1)).map(percent)
+    frame["text"] = frame["počet"].astype(str) + " (" + frame["podiel"] + ")"
+    y = alt.Y("opatrenie:N", sort=op.OPTION_NAMES, title=None, axis=alt.Axis(ticks=False, domain=False, labelLimit=260, labelPadding=8))
+    x = alt.X("počet:Q", title=None, axis=None, scale=alt.Scale(domain=[0, max(frame["počet"].max(), 1) * 1.3]))
+    bars = alt.Chart(frame).mark_bar(height=24, cornerRadiusEnd=4).encode(
+        y=y, x=x, color=alt.Color("opatrenie:N", scale=alt.Scale(domain=list(OPTION_COLORS), range=list(OPTION_COLORS.values())),
+                                  legend=None),
+        tooltip=[alt.Tooltip("opatrenie:N"), alt.Tooltip("počet:Q", title="počet"), alt.Tooltip("podiel:N")],
+    )
+    labels = alt.Chart(frame).mark_text(align="left", dx=6, fontSize=13, fontWeight=600, color=LABEL_COLOR).encode(
+        y=y, x=x, text="text:N")
+    return finish((bars + labels).properties(height=44 * len(frame)))
+
+
+def patterns_chart(records, top=8):
+    """Najčastejšie vzory útokov v uložených hodnoteniach s ich očakávanou stratou."""
+    frame = (records.groupby("vzor_utoku")
+             .agg(počet=("id", "size"), strata=("ocakavana_strata", "sum"))
+             .sort_values(["počet", "strata"], ascending=False).head(top).reset_index())
+    frame["strata text"] = frame["strata"].map(euro)
+    frame["text"] = frame["počet"].astype(str)
+    order = list(frame["vzor_utoku"])
+    y = alt.Y("vzor_utoku:N", sort=order, title=None, axis=alt.Axis(ticks=False, domain=False, labelLimit=260, labelPadding=8))
+    x = alt.X("počet:Q", title=None, axis=None, scale=alt.Scale(domain=[0, frame["počet"].max() * 1.2]))
+    tooltip = [alt.Tooltip("vzor_utoku:N", title="vzor útoku"), alt.Tooltip("počet:Q", title="počet"),
+               alt.Tooltip("strata text:N", title="očakávaná strata spolu")]
+    bars = alt.Chart(frame).mark_bar(height=24, cornerRadiusEnd=4, color=COST_COLOR).encode(y=y, x=x, tooltip=tooltip)
+    labels = alt.Chart(frame).mark_text(align="left", dx=6, fontSize=13, fontWeight=600, color=LABEL_COLOR).encode(
+        y=y, x=x, text="text:N")
+    return finish((bars + labels).properties(height=44 * len(frame)))
 
 
 # ---------------------------------------------------------------- výsledok
@@ -661,6 +858,35 @@ def records_tab():
                         st.rerun()
 
 
+@st.fragment(run_every=5)
+def overview_tab():
+    """Grafy z uložených hodnotení. Obnovujú sa každých 5 sekúnd, aby bolo vidieť aj hodnotenia z API."""
+    records = op.load_assessments()
+    if records.empty:
+        st.html(f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Zatiaľ nie je čo zobraziť</h4>'
+                '<p>Grafy sa objavia po prvom hodnotení. Pridajte ho na záložke Nové hodnotenie, tlačidlom '
+                '<b>Náhodný incident</b> alebo cez API.</p></div>')
+        return
+    timeline = op.assessment_timeline(records)
+    last = timeline.iloc[-1]
+    top_option = records["opatrenie"].value_counts().idxmax()
+    st.html(kpi_row([
+        ("Hodnotenia", str(len(records)), f"posledné {esc(date_time(last['vytvorene']))}"),
+        ("Očakávaná strata spolu", euro(records["ocakavana_strata"].sum()), "ročne, pred opatreniami"),
+        ("Vysoký dopad", str(int((records["predikovany_dopad"] == "vysoký").sum())), "predikovaný"),
+        ("Najčastejšie opatrenie", esc(top_option), f"{int((records['opatrenie'] == top_option).sum())}× odporúčané"),
+    ]))
+    st.html('<div class="rk-section">Počet hodnotení v čase podľa predikovaného dopadu</div>')
+    st.altair_chart(impact_timeline_chart(timeline), width="stretch")
+    st.html('<div class="rk-section">Kumulatívna očakávaná ročná strata</div>')
+    st.altair_chart(loss_timeline_chart(timeline), width="stretch")
+    st.html('<div class="rk-section">Odporúčané opatrenia</div>')
+    st.altair_chart(options_chart(records), width="stretch")
+    st.html('<div class="rk-section">Najčastejšie vzory útokov</div>')
+    st.altair_chart(patterns_chart(records), width="stretch")
+    st.caption("Grafy sa obnovujú automaticky každých 5 sekúnd, takže zahŕňajú aj hodnotenia pridané cez API.")
+
+
 def register_tab():
     register = op.load_register()
     worthwhile = register[register["opatrenie"] != op.OPTION_NAMES[0]]
@@ -702,13 +928,62 @@ def register_tab():
         },
     )
 
-    figures = [("Register rizík", "7_register_rizik.png"), ("Rozpočet", "8_rozpocet.png"),
-               ("Porovnanie stratégií", "9_porovnanie_strategii_rizik.png")]
-    figures = [(title, op.FIGURES_DIR / name) for title, name in figures if (op.FIGURES_DIR / name).exists()]
-    if figures:
-        st.html('<div class="rk-section">Grafy z notebooku preskriptivna_udrzba.ipynb</div>')
-        for tab, (_, path) in zip(st.tabs([title for title, _ in figures]), figures):
-            tab.image(str(path), width="stretch")
+    budget_section()
+    strategy_section()
+
+
+def budget_section():
+    total = op.budget_total()
+    st.html('<div class="rk-section">Priorita pri obmedzenom rozpočte</div><div class="rk-note">Opatrenia sa zavádzajú '
+            f'postupne, kým stačí ročný rozpočet. Všetky odporúčané opatrenia stoja {euro(total)} ročne. Znížená strata '
+            'je spočítaná pri skutočnom dopade testovacích incidentov.</div>')
+    steps = sorted(set(range(0, int(total) + 1, 10_000)) | {int(total)})
+    budget = st.select_slider("Ročný rozpočet na opatrenia", steps, value=min(250_000, int(total)), format_func=euro,
+                              key="rozpocet")
+    curves = op.budget_curves()
+    covered, reduced = op.budget_coverage(budget, op.BUDGET_ORDERS[0])
+    covered_freq, reduced_freq = op.budget_coverage(budget, op.BUDGET_ORDERS[1])
+    spent = covered["cena (€)"].sum()
+    st.html(kpi_row([
+        ("Pokryté scenáre", f"{len(covered)} z {len(curves[op.BUDGET_ORDERS[0]])}", f"minie sa {esc(euro(spent))}"),
+        ("Znížená strata podľa prínosu na euro", euro(reduced), "ročne"),
+        ("Znížená strata podľa frekvencie", euro(reduced_freq),
+         f"{len(covered_freq)} scenárov, o {esc(euro(reduced - reduced_freq))} menej" if reduced >= reduced_freq
+         else f"{len(covered_freq)} scenárov"),
+    ]))
+    st.altair_chart(budget_chart(curves, budget), width="stretch")
+    if covered.empty:
+        st.caption("Z tohto rozpočtu sa nepokryje žiadny scenár. Najlacnejšie prvé opatrenie stojí "
+                   f"{euro(curves[op.BUDGET_ORDERS[0]]['cena (€)'].iloc[0])}.")
+        return
+    with st.expander(f"Scenáre pokryté z rozpočtu {euro(budget)} ({len(covered)})", icon=":material/checklist:"):
+        st.dataframe(
+            covered.style.format({"cena (€)": euro, "znížená strata (€)": euro, "rozpočet (€)": euro}),
+            hide_index=True, width="stretch",
+            column_order=["poradie", "odvetvie", "vzor_utoku", "opatrenie", "opatrenia CIS", "cena (€)",
+                          "znížená strata (€)", "rozpočet (€)"],
+            column_config={"poradie": st.column_config.NumberColumn("Poradie", width="small"), "odvetvie": "Odvetvie",
+                           "vzor_utoku": "Vzor útoku", "opatrenie": "Opatrenie", "opatrenia CIS": "Opatrenia CIS",
+                           "cena (€)": "Ročná cena", "znížená strata (€)": "Znížená strata",
+                           "rozpočet (€)": "Rozpočet spolu"},
+        )
+
+
+def strategy_section():
+    strategies = op.strategy_comparison()
+    ours = strategies[strategies["naša"]].iloc[0]
+    best = strategies.iloc[0]
+    fixed = strategies[strategies["stratégia"].str.startswith("Všade")].iloc[0]
+    st.html('<div class="rk-section">Porovnanie stratégií</div><div class="rk-note">Priemerné ročné náklady na organizáciu '
+            'pri skutočnom dopade testovacích incidentov: cena opatrení plus strata, ktorá zostane. Nižšie je lepšie.</div>')
+    st.html(kpi_row([
+        ("Naše riešenie", euro(ours["na organizáciu (€)"]), "ročne na organizáciu"),
+        ("Rozdiel od optima", euro(ours["na organizáciu (€)"] - best["na organizáciu (€)"]), esc(best["stratégia"])),
+        ("Úspora oproti najlepšej pevnej",
+         decimal((fixed["na organizáciu (€)"] - ours["na organizáciu (€)"]) / fixed["na organizáciu (€)"] * 100, 1) + " %",
+         esc(fixed["stratégia"].lower())),
+    ]))
+    st.altair_chart(strategy_chart(strategies), width="stretch")
 
 
 def assumptions_tab():
@@ -793,13 +1068,15 @@ if missing:
 
 load_context()
 
-tab_new, tab_records, tab_register, tab_assumptions = st.tabs(
-    ["Nové hodnotenie", "Uložené hodnotenia", "Register rizík", "Predpoklady"]
+tab_new, tab_records, tab_overview, tab_register, tab_assumptions = st.tabs(
+    ["Nové hodnotenie", "Uložené hodnotenia", "Prehľad", "Register rizík", "Predpoklady"]
 )
 with tab_new:
     new_assessment_tab()
 with tab_records:
     records_tab()
+with tab_overview:
+    overview_tab()
 with tab_register:
     register_tab()
 with tab_assumptions:

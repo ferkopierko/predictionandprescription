@@ -367,7 +367,8 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 | --- | --- |
 | Nové hodnotenie | formulár incidentu, pravdepodobnosti dopadu, očakávaná ročná strata, odporúčané opatrenie s opatreniami CIS a porovnanie všetkých 4 opatrení. Tlačidlo *Náhodný testovací incident* vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad. |
 | Uložené hodnotenia | záznamy z databázy zoradené podľa očakávanej straty, vstup hodnotenia, export do CSV, vymazanie |
-| Register rizík | 48 scenárov z `vcdb_register_rizik.csv` a grafy 7 až 9 |
+| Prehľad | grafy z uložených hodnotení: počet v čase podľa predikovaného dopadu, kumulatívna očakávaná strata, odporúčané opatrenia, najčastejšie vzory útokov; obnovujú sa každých 5 sekúnd |
+| Register rizík | 48 scenárov z `vcdb_register_rizik.csv`, interaktívna mapa rizík, krivka zníženej straty s posuvníkom rozpočtu a porovnanie stratégií, počítané z `vcdb_predikcie.csv` rovnako ako grafy 7 až 9 |
 | Predpoklady | straty, ceny a účinnosť opatrení, ceny podľa vzoru útoku a prahy, od ktorých sa opatrenie oplatí |
 
 ### 6.3 REST API

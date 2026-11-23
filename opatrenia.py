@@ -416,6 +416,153 @@ def load_register():
                                 ignore_index=True)
 
 
+# ---------------------------------------------------------------- scenáre, stratégie a rozpočet
+# Rovnaký výpočet ako časti 1, 4 a 5 notebooku preskriptivna_udrzba.ipynb (grafy 8 a 9)
+
+MIN_SCENARIO_INCIDENTS = 10
+STRATEGY_OURS = "Podľa predikovaného dopadu"
+STRATEGY_LABELS = {
+    "S dokonalou znalosťou": "S dokonalou znalosťou dopadu (teoretické optimum)",
+    STRATEGY_OURS: "Podľa predikovaného dopadu (naše riešenie)",
+    "Bez modelu, podľa histórie": "Bez modelu, podľa histórie",
+    "Podľa najpravdepodobnejšej triedy": "Podľa najpravdepodobnejšej triedy",
+    "Akceptovať a monitorovať": "Všade akceptovať",
+    "Prevencia": "Všade prevencia",
+    "Detekcia a reakcia": "Všade detekcia a reakcia",
+    "Komplexná ochrana": "Všade komplexná ochrana",
+}
+BUDGET_ORDERS = ["Podľa prínosu na euro", "Podľa frekvencie"]
+
+
+def _scenario_masks(frame, sectors, patterns):
+    """Pre každý scenár maska incidentov, z ktorých sa odhaduje dopad, a úroveň odhadu."""
+    result = []
+    for sector in sectors:
+        for pattern in patterns:
+            for mask, level in [
+                ((frame["odvetvie"] == sector) & (frame["vzor_utoku"] == pattern), "odvetvie a vzor"),
+                (frame["vzor_utoku"] == pattern, "iba vzor"),
+                (pd.Series(True, index=frame.index), "všetky incidenty"),
+            ]:
+                if mask.sum() >= MIN_SCENARIO_INCIDENTS:
+                    result.append((mask.to_numpy(), level))
+                    break
+    return result
+
+
+def _distributions(masks, probabilities):
+    return np.array([probabilities[mask].mean(axis=0) for mask, _ in masks])
+
+
+def _cost_matrix(distribution, frequency, costs):
+    """Ako total_costs, ale pre všetky scenáre naraz: matica scenáre × opatrenia."""
+    base = INCIDENTS_PER_YEAR * frequency * (distribution @ LOSS.to_numpy())
+    return costs + base[:, None] * residual_share()[None, :]
+
+
+def _one_hot(impacts):
+    return np.eye(len(LABELS))[pd.Categorical(impacts, categories=LABELS).codes]
+
+
+@lru_cache(maxsize=1)
+def scenario_analysis():
+    """Scenáre odvetvie × vzor útoku, porovnanie stratégií a krivky rozpočtu z vcdb_predikcie.csv."""
+    ctx = context()
+    clean = ctx["clean"]
+    predictions = pd.read_csv(PREDICTIONS_PATH)
+    patterns = list(dict.fromkeys(ctx["controls"]["vzor_utoku"]))
+    representative = clean[clean["reprezentativny"]]
+    sectors = list(representative.loc[representative["odvetvie"] != "Neznáme", "odvetvie"].value_counts().head(6).index)
+    test_ids = set(predictions["zaznam_id"])
+    history = clean[clean["dopad"].notna() & ~clean["zaznam_id"].isin(test_ids)].reset_index(drop=True)
+
+    scenarios = pd.DataFrame([(sector, pattern) for sector in sectors for pattern in patterns],
+                             columns=["odvetvie", "vzor_utoku"])
+    frequency = np.array([ctx["share"].loc[sector].get(pattern, 0.0)
+                          for sector, pattern in zip(scenarios["odvetvie"], scenarios["vzor_utoku"])])
+    test_masks = _scenario_masks(predictions, sectors, patterns)
+    dist_model = _distributions(test_masks, predictions[[f"p_lgbm_{label}" for label in LABELS]].to_numpy())
+    dist_actual = _distributions(test_masks, _one_hot(predictions["dopad"]))
+    dist_history = _distributions(_scenario_masks(history, sectors, patterns), _one_hot(history["dopad"]))
+    costs = np.array([option_costs(pattern) for pattern in scenarios["vzor_utoku"]])
+    rows = np.arange(len(scenarios))
+
+    model_costs = _cost_matrix(dist_model, frequency, costs)
+    actual_costs = _cost_matrix(dist_actual, frequency, costs)
+    decisions = {name: np.full(len(scenarios), index) for index, name in enumerate(OPTION_NAMES)}
+    decisions[STRATEGY_OURS] = model_costs.argmin(axis=1)
+    decisions["Podľa najpravdepodobnejšej triedy"] = np.array([0, 2, 3])[dist_model.argmax(axis=1)]
+    decisions["Bez modelu, podľa histórie"] = _cost_matrix(dist_history, frequency, costs).argmin(axis=1)
+    decisions["S dokonalou znalosťou"] = actual_costs.argmin(axis=1)
+    strategies = pd.DataFrame([
+        {"stratégia": STRATEGY_LABELS[name], "naša": name == STRATEGY_OURS,
+         "ročné náklady spolu (€)": float(actual_costs[rows, chosen].sum())}
+        for name, chosen in decisions.items()
+    ])
+    strategies["na organizáciu (€)"] = strategies["ročné náklady spolu (€)"] / len(sectors)
+    strategies = strategies.sort_values("na organizáciu (€)", ignore_index=True)
+
+    decision = decisions[STRATEGY_OURS]
+    chosen_cost = costs[rows, decision]
+    benefit = model_costs[:, 0] - model_costs[rows, decision] + chosen_cost - MONITORING_COST
+    worthwhile = decision != 0
+    actual_reduction = actual_costs[:, 0] - actual_costs[rows, decision] + chosen_cost - MONITORING_COST
+    scenarios["frekvencia za rok"] = frequency
+    scenarios["opatrenie"] = np.array(OPTION_NAMES)[decision]
+    scenarios["opatrenia CIS"] = [control_list(pattern, option)
+                                  for pattern, option in zip(scenarios["vzor_utoku"], scenarios["opatrenie"])]
+    scenarios["cena (€)"] = chosen_cost - MONITORING_COST
+    scenarios["znížená strata (€)"] = actual_reduction
+
+    orders = {
+        BUDGET_ORDERS[0]: np.argsort(-(benefit / np.maximum(chosen_cost - MONITORING_COST, 1))),
+        BUDGET_ORDERS[1]: np.argsort(-frequency),
+    }
+    curves = {}
+    for name, order in orders.items():
+        steps = scenarios.iloc[[index for index in order if worthwhile[index]]].reset_index(drop=True)
+        steps.insert(0, "poradie", np.arange(1, len(steps) + 1))
+        steps["rozpočet (€)"] = steps["cena (€)"].cumsum()
+        steps["znížená strata spolu (€)"] = steps["znížená strata (€)"].cumsum()
+        curves[name] = steps
+    return {"sectors": sectors, "strategies": strategies, "curves": curves}
+
+
+def strategy_comparison():
+    """Ročné náklady stratégií pri skutočnom dopade, spolu a na jednu organizáciu, od najlacnejšej."""
+    return scenario_analysis()["strategies"].copy()
+
+
+def budget_curves():
+    """Pre každé poradie scenáre v poradí zavádzania s kumulatívnym rozpočtom a zníženou stratou."""
+    return {name: steps.copy() for name, steps in scenario_analysis()["curves"].items()}
+
+
+def budget_total():
+    """Ročná cena všetkých odporúčaných opatrení bez monitorovania."""
+    return float(scenario_analysis()["curves"][BUDGET_ORDERS[0]]["cena (€)"].sum())
+
+
+def budget_coverage(budget, order=BUDGET_ORDERS[0]):
+    """Scenáre, ktoré sa pokryjú z ročného rozpočtu, a znížená strata. Ako v notebooku sa ide presne v poradí."""
+    steps = scenario_analysis()["curves"][order]
+    covered = steps[steps["rozpočet (€)"] <= budget + 1e-9].copy()
+    reduced = float(covered["znížená strata spolu (€)"].iloc[-1]) if len(covered) else 0.0
+    return covered, reduced
+
+
+def assessment_timeline(records):
+    """Uložené hodnotenia zoradené podľa času s kumulatívnym počtom podľa dopadu a kumulatívnou stratou."""
+    frame = records.copy()
+    frame["čas"] = pd.to_datetime(frame["vytvorene"], errors="coerce")
+    frame = frame.dropna(subset=["čas"]).sort_values(["čas", "id"], ignore_index=True)
+    for label in LABELS:
+        frame[f"počet {label}"] = (frame["predikovany_dopad"] == label).cumsum()
+    frame["počet spolu"] = np.arange(1, len(frame) + 1)
+    frame["strata spolu (€)"] = frame["ocakavana_strata"].cumsum()
+    return frame
+
+
 # ---------------------------------------------------------------- databáza
 
 SCHEMA = """

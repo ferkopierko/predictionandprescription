@@ -88,7 +88,8 @@ Databáza je vtedy v `data/processed/hodnotenia.db`, iné umiestnenie sa dá nas
 
 - **Nové hodnotenie:** formulár incidentu (odvetvie, veľkosť, krajina, cielenosť, typ aktéra a útoku, podrobné hodnoty, narušená integrita a dostupnosť). Ponúka iba hodnoty, ktoré sa v dátach vyskytujú aspoň 5-krát. Výsledkom sú pravdepodobnosti dopadu, očakávaná ročná strata a odporúčané opatrenie s opatreniami CIS. Tlačidlo **Náhodný testovací incident** vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad.
 - **Uložené hodnotenia:** záznamy z databázy zoradené podľa očakávanej straty, s možnosťou vymazania.
-- **Register rizík:** 48 scenárov z notebooku a grafy 7 až 9.
+- **Prehľad:** interaktívne grafy z uložených hodnotení: počet hodnotení v čase podľa dopadu, kumulatívna očakávaná strata, odporúčané opatrenia a najčastejšie vzory útokov. Obnovujú sa každých 5 sekúnd, takže zahŕňajú aj hodnotenia z API.
+- **Register rizík:** 48 scenárov z notebooku, interaktívna mapa rizík, krivka rozpočtu s posuvníkom ročného rozpočtu a porovnanie stratégií. Grafy sa počítajú z dát rovnako ako grafy 7 až 9 v notebooku.
 - **Predpoklady:** straty, ceny a účinnosť opatrení a prahy, od ktorých sa opatrenie oplatí.
 
 **REST API**
