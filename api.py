@@ -5,6 +5,7 @@ Dokumentácia API: http://localhost:8000/docs
 """
 
 import math
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -44,6 +45,12 @@ class Request(Incident):
         None, ge=0, le=100,
         description="Očakávaný počet incidentov tohto vzoru za rok. Ak chýba, použije sa podiel vzoru v odvetví.",
     )
+    zdroj: Literal["API", "simulácia"] = Field(
+        "API", description="Pôvod hodnotenia. Generátor simulacia.py posiela hodnotu simulácia.",
+    )
+    skutocny_dopad: Literal["nízky", "stredný", "vysoký"] | None = Field(
+        None, description="Skutočný dopad, ak je známy (napríklad pri testovacom incidente z VCDB). Model ho nepoužíva.",
+    )
 
 
 def _ensure_data():
@@ -69,12 +76,14 @@ def moznosti():
 @app.post("/api/hodnotenie", status_code=201, summary="Vyhodnotí incident a uloží výsledok do databázy")
 def hodnotenie(request: Request):
     _ensure_data()
-    incident = request.model_dump(exclude={"nazov", "frekvencia"})
+    incident = request.model_dump(exclude={"nazov", "frekvencia", "zdroj", "skutocny_dopad"})
     errors = op.validate(incident)
     if errors:
         raise HTTPException(422, errors)
     result = op.assess(incident, request.frekvencia)
-    record_id = op.save_assessment(incident, result, source="API", name=request.nazov)
+    record_id = op.save_assessment(
+        incident, result, source=request.zdroj, name=request.nazov, actual_impact=request.skutocny_dopad,
+    )
     return {"id": record_id, **result}
 
 

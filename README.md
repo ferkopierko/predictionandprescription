@@ -1,6 +1,6 @@
 # Threat Modeling and Risk Assessment
 
-Podrobný opis riešenia je v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
+Stručný prehľad je v [KRATKA_DOKUMENTACIA.md](KRATKA_DOKUMENTACIA.md), podrobný opis riešenia v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
 
 ## Dataset
 
@@ -89,15 +89,28 @@ Databáza je vtedy v `data/processed/hodnotenia.db`, iné umiestnenie sa dá nas
 - **Nové hodnotenie:** formulár incidentu (odvetvie, veľkosť, krajina, cielenosť, typ aktéra a útoku, podrobné hodnoty, narušená integrita a dostupnosť). Ponúka iba hodnoty, ktoré sa v dátach vyskytujú aspoň 5-krát. Výsledkom sú pravdepodobnosti dopadu, očakávaná ročná strata a odporúčané opatrenie s opatreniami CIS. Tlačidlo **Náhodný testovací incident** vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad.
 - **Uložené hodnotenia:** záznamy z databázy zoradené podľa očakávanej straty, s možnosťou vymazania.
 - **Prehľad:** interaktívne grafy z uložených hodnotení: počet hodnotení v čase podľa dopadu, kumulatívna očakávaná strata, odporúčané opatrenia a najčastejšie vzory útokov. Obnovujú sa každých 5 sekúnd, takže zahŕňajú aj hodnotenia z API.
+- **Živé sledovanie:** incidenty, ktoré posiela generátor `simulacia.py` cez API, zobrazené naživo (obnova každé 2 s): stav generátora, ukazovatele, tabuľka posledných incidentov a grafy. Popis je nižšie v časti Simulácia sledovania siete.
 - **Register rizík:** 48 scenárov z notebooku, interaktívna mapa rizík, krivka rozpočtu s posuvníkom ročného rozpočtu a porovnanie stratégií. Grafy sa počítajú z dát rovnako ako grafy 7 až 9 v notebooku.
 - **Predpoklady:** straty, ceny a účinnosť opatrení a prahy, od ktorých sa opatrenie oplatí.
+
+**Simulácia sledovania siete**
+
+Generátor [simulacia.py](simulacia.py) každých ~3 sekundy pošle náhodný testovací incident z VCDB na `POST /api/hodnotenie` so zdrojom `simulácia` a skutočným dopadom z dát. API ho vyhodnotí a uloží a záložka **Živé sledovanie** ho hneď zobrazí. API musí bežať.
+
+```powershell
+python simulacia.py                          # kým ho nezastavíte (Ctrl+C)
+python simulacia.py --interval 1 --pocet 50  # 50 incidentov, jeden za sekundu
+python simulacia.py --seed 67                # opakovateľné poradie incidentov
+```
+
+V Dockeri sa generátor spustí spolu s ostatnými službami príkazom `docker compose --profile simulacia up -d --build`.
 
 **REST API**
 
 | Metóda | Cesta | Popis |
 | --- | --- | --- |
 | GET | `/api/moznosti` | povolené hodnoty polí incidentu |
-| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy |
+| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy (nepovinné polia `zdroj` a `skutocny_dopad` používa simulácia) |
 | GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
 | GET | `/api/register` | register rizík z preskriptívnej analýzy |
 

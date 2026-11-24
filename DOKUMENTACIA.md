@@ -347,6 +347,7 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 | API | [api.py](api.py) | REST API (FastAPI) na <http://localhost:8000>, dokumentácia na `/docs` |
 | Logika modelu | [opatrenia.py](opatrenia.py) | Prevod vstupu na znaky, predikcia dopadu, výber opatrenia, databáza |
 | Znaky modelu | [vcdb_model.py](vcdb_model.py) | Príprava znakov a kalibrované pravdepodobnosti, potrebné na načítanie modelu |
+| Simulácia | [simulacia.py](simulacia.py) | Generátor, ktorý posiela testovacie incidenty z VCDB na API (simulácia sledovania siete) |
 | Databáza | SQLite, tabuľka `hodnotenia` | Uložené hodnotenia z aplikácie aj z API |
 | Nasadenie | [Dockerfile](Dockerfile), [compose.yaml](compose.yaml) | Kontajnery `app` a `api`, spoločná databáza vo volume Dockeru |
 
@@ -368,6 +369,7 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 | Nové hodnotenie | formulár incidentu, pravdepodobnosti dopadu, očakávaná ročná strata, odporúčané opatrenie s opatreniami CIS a porovnanie všetkých 4 opatrení. Tlačidlo *Náhodný testovací incident* vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad. |
 | Uložené hodnotenia | záznamy z databázy zoradené podľa očakávanej straty, vstup hodnotenia, export do CSV, vymazanie |
 | Prehľad | grafy z uložených hodnotení: počet v čase podľa predikovaného dopadu, kumulatívna očakávaná strata, odporúčané opatrenia, najčastejšie vzory útokov; obnovujú sa každých 5 sekúnd |
+| Živé sledovanie | incidenty zo simulácie naživo (obnova každé 2 s): stav generátora, počet incidentov, vysoký dopad, zhoda predikcie so skutočným dopadom, očakávaná strata, tabuľka posledných incidentov a grafy straty v čase a vzorov útokov |
 | Register rizík | 48 scenárov z `vcdb_register_rizik.csv`, interaktívna mapa rizík, krivka zníženej straty s posuvníkom rozpočtu a porovnanie stratégií, počítané z `vcdb_predikcie.csv` rovnako ako grafy 7 až 9 |
 | Predpoklady | straty, ceny a účinnosť opatrení, ceny podľa vzoru útoku a prahy, od ktorých sa opatrenie oplatí |
 
@@ -376,11 +378,22 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 | Metóda | Cesta | Popis |
 | --- | --- | --- |
 | GET | `/api/moznosti` | povolené hodnoty polí incidentu |
-| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy, pri neplatnom vstupe vráti 422 so zoznamom chýb |
+| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy, pri neplatnom vstupe vráti 422 so zoznamom chýb; nepovinné polia `zdroj` (`API` alebo `simulácia`) a `skutocny_dopad` sa iba uložia, model ich nepoužíva |
 | GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
 | GET | `/api/register` | register rizík z preskriptívnej analýzy |
 
 Aplikácia aj API používajú rovnaký modul `opatrenia.py` a rovnakú databázu, takže hodnotenie pridané cez API sa hneď zobrazí v aplikácii.
+
+### 6.4 Simulácia sledovania siete
+
+Generátor [simulacia.py](simulacia.py) nahrádza ručné vypĺňanie formulára a ukazuje, ako by sa modul napojil na systém sledovania siete (napríklad SIEM):
+
+1. Každých ~3 s (parameter `--interval`, náhodná odchýlka `--rozptyl`) vyberie incident z testovacej časti dát, ktorú model pri tréningu nevidel, rovnako ako tlačidlo *Náhodný testovací incident*.
+2. Pošle ho na `POST /api/hodnotenie` so zdrojom `simulácia` a so skutočným dopadom z VCDB.
+3. API incident vyhodnotí rovnakým výpočtom ako formulár a uloží ho do databázy.
+4. Záložka *Živé sledovanie* načítava databázu každé 2 sekundy a zobrazí nové incidenty, ich riziko a zhodu predikcie so skutočným dopadom.
+
+Generátor počká, kým API odpovedá, a pri výpadku API pokračuje ďalším pokusom. V Dockeri je ako služba `simulacia` v profile `simulacia`, takže sa spúšťa iba na požiadanie.
 
 ## 7. Štruktúra projektu a spustenie
 
@@ -393,6 +406,7 @@ Aplikácia aj API používajú rovnaký modul `opatrenia.py` a rovnakú databáz
 ├── preskriptivna_udrzba.ipynb   3. preskripcia opatrení
 ├── opatrenia.py                 hodnotenie incidentu a databáza
 ├── app.py, api.py               aplikácia Streamlit a REST API
+├── simulacia.py                 generátor incidentov pre živé sledovanie
 ├── figures/                     vizualizácie 1 až 9
 └── data/                        dáta a modely (mimo gitu)
 ```
@@ -417,7 +431,7 @@ Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predc
 | Prediktívna údržba | 2 ML algoritmy, porovnanie, metriky | logistická regresia a LightGBM, Macro F1, Accuracy, MAE, recall, precision, log loss, ROC AUC, bootstrap |
 | Preskriptívna údržba | aspoň 3 typy opatrení, aspoň 2 faktory, zdôvodnenie | 4 typy opatrení, 4 faktory (riziko, náklady, čas, priorita), prahy a zdôvodnenie |
 | Integrácia do IS | API, frontend, databáza | REST API vo FastAPI, aplikácia Streamlit, databáza SQLite, všetko nad modelom VCDB a v Dockeri |
-| Dokumentácia | algoritmy, výsledky, rozhodovacia logika | tento dokument a [VYSVETLENIE.md](VYSVETLENIE.md) |
+| Dokumentácia | algoritmy, výsledky, rozhodovacia logika | tento dokument, [KRATKA_DOKUMENTACIA.md](KRATKA_DOKUMENTACIA.md) a [VYSVETLENIE.md](VYSVETLENIE.md) |
 | BPMN | diagram procesu | splnené v rámci zadania č. 1 |
 
 ## 9. Obmedzenia
