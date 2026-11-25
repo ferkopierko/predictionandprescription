@@ -30,5 +30,18 @@ services:
       start_period: 40s
       retries: 3
 
+  # Generátor simulácie sledovania siete, spúšťa sa iba na požiadanie:
+  # docker compose --profile simulacia up -d --build
+  simulacia:
+    <<: *common
+    container_name: hodnotenie-rizika-simulacia
+    command: ["python", "simulacia.py"]
+    environment:
+      SIMULACIA_API: http://api:8000
+    profiles: ["simulacia"]
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   runtime:

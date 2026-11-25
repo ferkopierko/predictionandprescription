@@ -180,6 +180,27 @@ header[data-testid="stHeader"] { background: transparent; height: 0; }
   background: var(--rk-primary-soft); font-size: .92rem; margin-bottom: 6px; }
 .rk-demo b { font-weight: 650; }
 
+/* Živé sledovanie */
+.rk-live { display: inline-flex; align-items: center; gap: 8px; font-size: .92rem; color: var(--rk-muted); }
+.rk-live b { color: inherit; font-weight: 650; }
+.rk-live.on { color: var(--rk-low); }
+.rk-live code { font-size: .85rem; }
+.rk-dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; flex: none; }
+.rk-live.on .rk-dot { animation: rk-pulse 1.6s ease-out infinite; }
+@keyframes rk-pulse { 0% { box-shadow: 0 0 0 0 var(--rk-low-bg); } 70% { box-shadow: 0 0 0 9px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.rk-feed { overflow-x: auto; border: 1px solid var(--rk-border); border-radius: 12px; background: var(--rk-surface); margin-top: 6px; }
+.rk-feed table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.rk-feed th { text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
+  color: var(--rk-muted); padding: 9px 12px; border-bottom: 1px solid var(--rk-border); white-space: nowrap; }
+.rk-feed td { padding: 7px 12px; border-bottom: 1px solid var(--rk-border); white-space: nowrap; }
+.rk-feed tr:last-child td { border-bottom: none; }
+.rk-feed .num { text-align: right; font-variant-numeric: tabular-nums; }
+.rk-feed th.num { text-align: right; }
+.rk-feed tr.new td { animation: rk-flash 2.4s ease-out; }
+@keyframes rk-flash { from { background: var(--rk-primary-soft); } to { background: transparent; } }
+.rk-hit { color: var(--rk-low); font-weight: 700; }
+.rk-miss { color: var(--rk-mid); font-weight: 700; }
+
 /* Panel výsledku ostáva na širokej obrazovke pri posúvaní formulára viditeľný */
 @media (min-width: 1100px) {
   .st-key-result_panel { position: sticky; top: 1rem; }
@@ -919,6 +940,139 @@ def overview_tab():
     st.caption("Grafy sa obnovujú automaticky každých 5 sekúnd, takže zahŕňajú aj hodnotenia pridané cez API.")
 
 
+# ---------------------------------------------------------------- živé sledovanie
+
+LIVE_SOURCE = "simulácia"
+LIVE_REFRESH = 2       # sekundy medzi obnoveniami záložky
+LIVE_WINDOW = 60       # počet posledných incidentov v grafoch
+LIVE_FEED = 12         # počet riadkov v zozname posledných incidentov
+LIVE_IDLE = 15         # po koľkých sekundách bez incidentu považujeme generátor za zastavený
+
+
+def live_loss_chart(frame):
+    """Očakávaná ročná strata každého incidentu v čase, farba podľa predikovaného dopadu."""
+    data = frame.copy()
+    data["čas text"] = data["čas"].dt.strftime("%H:%M:%S")
+    data["strata text"] = data["ocakavana_strata"].map(euro)
+    data["skutočný"] = data["skutocny_dopad"].fillna("–").replace("", "–")
+    x = alt.X("čas:T", title=None, axis=alt.Axis(format="%H:%M:%S", labelFlush=True, tickCount=6))
+    y = alt.Y("ocakavana_strata:Q", title="Očakávaná ročná strata (€)", scale=alt.Scale(type="sqrt"),
+              axis=alt.Axis(format=",.0f"))
+    color = alt.Color("predikovany_dopad:N", sort=op.LABELS,
+                      scale=alt.Scale(domain=list(IMPACT_COLORS), range=list(IMPACT_COLORS.values())),
+                      legend=alt.Legend(orient="bottom", title="Predikovaný dopad", direction="horizontal"))
+    tooltip = [alt.Tooltip("čas text:N", title="čas"), alt.Tooltip("nazov:N", title="incident"),
+               alt.Tooltip("odvetvie:N"), alt.Tooltip("vzor_utoku:N", title="vzor útoku"),
+               alt.Tooltip("predikovany_dopad:N", title="predikovaný dopad"), alt.Tooltip("skutočný:N", title="skutočný dopad"),
+               alt.Tooltip("strata text:N", title="očakávaná strata"), alt.Tooltip("opatrenie:N")]
+    line = alt.Chart(data).mark_line(color=RESIDUAL_COLOR, strokeWidth=1.2, opacity=0.7).encode(x=x, y=y)
+    points = alt.Chart(data).mark_circle(size=120, opacity=0.95, stroke="white", strokeWidth=0.8).encode(
+        x=x, y=y, color=color, tooltip=tooltip)
+    return finish((line + points).properties(height=300))
+
+
+def live_patterns_chart(frame, top=8):
+    """Vzory útokov v posledných incidentoch, rozdelené podľa predikovaného dopadu."""
+    order = frame["vzor_utoku"].value_counts().head(top).index.tolist()
+    data = (frame[frame["vzor_utoku"].isin(order)].groupby(["vzor_utoku", "predikovany_dopad"])
+            .size().rename("počet").reset_index())
+    y = alt.Y("vzor_utoku:N", sort=order, title=None, axis=alt.Axis(ticks=False, domain=False, labelLimit=260, labelPadding=8))
+    bars = alt.Chart(data).mark_bar(height=22).encode(
+        y=y,
+        x=alt.X("počet:Q", stack="zero", title=None, axis=alt.Axis(format="d", tickMinStep=1, grid=False)),
+        color=alt.Color("predikovany_dopad:N", sort=op.LABELS,
+                        scale=alt.Scale(domain=list(IMPACT_COLORS), range=list(IMPACT_COLORS.values())), legend=None),
+        order=alt.Order("poradie:Q"),
+        tooltip=[alt.Tooltip("vzor_utoku:N", title="vzor útoku"), alt.Tooltip("predikovany_dopad:N", title="dopad"),
+                 alt.Tooltip("počet:Q", title="počet")],
+    ).transform_calculate(poradie="indexof(['nízky', 'stredný', 'vysoký'], datum.predikovany_dopad)")
+    return finish(bars.properties(height=40 * len(order)))
+
+
+def live_feed_html(frame, seen):
+    """Posledné incidenty ako tabuľka, najnovší hore. Incidenty od posledného obnovenia sú zvýraznené."""
+    rows = []
+    for _, row in frame.iterrows():
+        actual = row["skutocny_dopad"] if isinstance(row["skutocny_dopad"], str) and row["skutocny_dopad"] else None
+        verdict = "" if actual is None else (
+            '<span class="rk-hit">✓</span>' if actual == row["predikovany_dopad"] else '<span class="rk-miss">✗</span>')
+        rows.append(
+            f'<tr class="{"new" if row["id"] > seen else ""}">'
+            f'<td class="num">{esc(row["čas"].strftime("%H:%M:%S"))}</td>'
+            f'<td>{esc(row["nazov"] or f"#{row.id}")}</td><td>{esc(row["odvetvie"])}</td><td>{esc(row["vzor_utoku"])}</td>'
+            f'<td>{impact_pill(row["predikovany_dopad"], small=True)}</td>'
+            f'<td>{impact_pill(actual, small=True) + " " + verdict if actual else "–"}</td>'
+            f'<td class="num">{esc(euro(row["ocakavana_strata"]))}</td><td>{esc(row["opatrenie"])}</td></tr>'
+        )
+    return ('<div class="rk-feed"><table><thead><tr><th>Čas</th><th>Incident</th><th>Odvetvie</th><th>Vzor útoku</th>'
+            '<th>Predikovaný dopad</th><th>Skutočný dopad</th><th class="num">Strata / rok</th><th>Opatrenie</th>'
+            f'</tr></thead><tbody>{"".join(rows)}</tbody></table></div>')
+
+
+@st.fragment(run_every=LIVE_REFRESH)
+def live_tab():
+    """Incidenty, ktoré posiela generátor simulacia.py cez API, zobrazené naživo."""
+    top = st.columns([3, 1.3, 1], vertical_alignment="center")
+    scope = top[1].segmented_control("Zdroj", ["Iba simulácia", "Všetky zdroje"], default="Iba simulácia",
+                                     key="live_scope", label_visibility="collapsed")
+    records = op.load_assessments()
+    simulated = records[records["zdroj"] == LIVE_SOURCE]
+    shown = records if scope == "Všetky zdroje" else simulated
+
+    with top[2].popover("Vymazať simuláciu", icon=":material/delete:", disabled=simulated.empty, width="stretch"):
+        st.write(f"Vymaže {len(simulated)} hodnotení zo simulácie. Ostatné hodnotenia zostanú.")
+        if st.button("Vymazať", type="primary", key="live_delete"):
+            op.delete_assessments(simulated["id"].tolist())
+            st.session_state.pop("live_seen", None)
+            st.rerun(scope="fragment")
+
+    now = datetime.now()
+    times = pd.to_datetime(simulated["vytvorene"], errors="coerce")
+    idle = (now - times.max()).total_seconds() if len(times) else None
+    if idle is not None and idle <= LIVE_IDLE:
+        top[0].html('<div class="rk-live on"><span class="rk-dot"></span><b>Generátor beží</b> · posledný incident '
+                    f'pred {int(idle)} s</div>')
+    else:
+        since = f" · posledný incident {esc(date_time(simulated['vytvorene'].iloc[times.argmax()]))}" if len(times) else ""
+        top[0].html('<div class="rk-live"><span class="rk-dot"></span><b>Generátor nebeží</b>'
+                    f'{since} · spustite <code>python simulacia.py</code></div>')
+
+    if shown.empty:
+        st.html(f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Čakám na incidenty</h4>'
+                '<p>Spustite API (<code>uvicorn api:app --port 8000</code>) a generátor (<code>python simulacia.py</code>). '
+                'Každých pár sekúnd pošle testovací incident z VCDB, ktorý sa tu hneď objaví.</p></div>')
+        return
+
+    frame = shown.assign(čas=pd.to_datetime(shown["vytvorene"], errors="coerce")).dropna(subset=["čas"])
+    frame = frame.sort_values("id").tail(LIVE_WINDOW)
+    last_minute = int((pd.to_datetime(shown["vytvorene"], errors="coerce") >= now - pd.Timedelta(minutes=1)).sum())
+    known = shown[shown["skutocny_dopad"].isin(op.LABELS)]
+    accuracy = percent((known["skutocny_dopad"] == known["predikovany_dopad"]).mean()) if len(known) else "–"
+    high = int((shown["predikovany_dopad"] == "vysoký").sum())
+    st.html(kpi_row([
+        ("Incidenty", str(len(shown)), f"{last_minute} za poslednú minútu"),
+        ("Vysoký dopad", str(high), f"{percent(high / len(shown))} incidentov"),
+        ("Zhoda so skutočným dopadom", accuracy, f"z {len(known)} incidentov so známym dopadom"),
+        ("Očakávaná strata spolu", euro(shown["ocakavana_strata"].sum()),
+         f"ročne, po opatreniach {esc(euro(shown['zostavajuca_strata'].sum()))}"),
+    ]))
+
+    seen = st.session_state.get("live_seen", int(frame["id"].max()))
+    st.html(f'<div class="rk-section">Posledné incidenty</div>'
+            f'{live_feed_html(frame.sort_values("id", ascending=False).head(LIVE_FEED), seen)}')
+    st.session_state["live_seen"] = int(frame["id"].max())
+
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        st.html(f'<div class="rk-section">Očakávaná ročná strata posledných {len(frame)} incidentov</div>')
+        st.altair_chart(live_loss_chart(frame), width="stretch")
+    with right:
+        st.html(f'<div class="rk-section">Vzory útokov v posledných {len(frame)} incidentoch</div>')
+        st.altair_chart(live_patterns_chart(frame), width="stretch")
+    st.caption(f"Záložka sa obnovuje každé {LIVE_REFRESH} s. Incidenty posiela generátor simulacia.py na POST /api/hodnotenie; "
+               "skutočný dopad je známy z dát VCDB a model ho pri predikcii nepoužíva.")
+
+
 def register_tab():
     register = op.load_register()
     worthwhile = register[register["opatrenie"] != op.OPTION_NAMES[0]]
@@ -1102,8 +1256,8 @@ if missing:
 
 load_context()
 
-tab_new, tab_records, tab_overview, tab_register, tab_assumptions = st.tabs(
-    ["Nové hodnotenie", "Uložené hodnotenia", "Prehľad", "Register rizík", "Predpoklady"]
+tab_new, tab_records, tab_overview, tab_live, tab_register, tab_assumptions = st.tabs(
+    ["Nové hodnotenie", "Uložené hodnotenia", "Prehľad", "Živé sledovanie", "Register rizík", "Predpoklady"]
 )
 with tab_new:
     new_assessment_tab()
@@ -1111,6 +1265,8 @@ with tab_records:
     records_tab()
 with tab_overview:
     overview_tab()
+with tab_live:
+    live_tab()
 with tab_register:
     register_tab()
 with tab_assumptions:
