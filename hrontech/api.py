@@ -10,8 +10,8 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, ConfigDict
 
-import opatrenia as op
-import firma as co
+from hrontech import opatrenia as op
+from hrontech import firma as co
 
 app = FastAPI(
     title="safetyfirst · HronTech Strojárne",

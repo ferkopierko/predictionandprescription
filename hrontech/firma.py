@@ -11,7 +11,7 @@ from datetime import datetime
 
 import pandas as pd
 
-import opatrenia as op
+from hrontech import opatrenia as op
 
 COMPANY_ID = "hrontech"
 STATUSES = ["Otvorená", "V riešení", "Odstránená"]

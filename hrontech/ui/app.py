@@ -12,13 +12,13 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-import opatrenia as op
-import preklady as pr
-import frontend as ui
-import firma as co
-import firma_ui as company_ui
+from hrontech import opatrenia as op
+from hrontech import preklady as pr
+from hrontech.ui import frontend as ui
+from hrontech import firma as co
+from hrontech.ui import firma_ui as company_ui
 
-st.set_page_config(page_title="safetyfirst", page_icon="◈", layout="wide", initial_sidebar_state="auto")
+st.set_page_config(page_title="safetyfirst", layout="wide", initial_sidebar_state="auto")
 
 PREFIX = "f_"
 SELECT_FIELDS = ["odvetvie", "velkost_organizacie", "krajina", "cielenost"]
@@ -596,8 +596,8 @@ def show_result(record_id, result, demo, name):
             st.warning("Ekonomicky najvýhodnejšie opatrenie presahuje ročný rozpočet firmy. Porovnajte dostupné možnosti v registri rizík.")
         if result.get("finding_id"):
             finding = co.finding(result["finding_id"])
-            st.info(f"Konkrétna oprava {finding['id']}: {finding['remediation']} Odhad jednorazovej ceny: {euro(finding['cost'])}.")
-            st.button("Otvoriť súvisiacu zraniteľnosť", icon=":material/build:", on_click=open_linked_finding, args=(finding["id"],))
+            st.write(f"**{finding['id']}:** {finding['remediation']} Odhad opravy: {euro(finding['cost'])}.")
+            st.button("Otvoriť súvisiacu zraniteľnosť", on_click=open_linked_finding, args=(finding["id"],))
 
 
     st.html('<div class="rk-section">Pravdepodobnosť dopadu</div>')
@@ -641,7 +641,6 @@ def show_result(record_id, result, demo, name):
                 "zostavajuca_strata": "Zostávajúca strata", "celkove_naklady": "Spolu", "opatrenia_cis": "Opatrenia CIS",
             },
         )
-    st.caption("Sumy vychádzajú z modelových predpokladov uvedených v časti Predpoklady. Výsledok je prvotné posúdenie a nenahrádza analytika.")
 
 
 def open_linked_finding(finding_id):
@@ -700,32 +699,19 @@ def incident_form(options):
         stage = st.segmented_control(
             "Postup hodnotenia", [0, 1, 2], default=0 if "intake_step" not in st.session_state else None,
             key="intake_step", width="stretch",
-            format_func=lambda value: f'{"✓" if complete[value] and value != current else str(value + 1) + "."} {names[value]}',
+            format_func=lambda value: f"{value + 1}. {names[value]}",
             label_visibility="collapsed", on_change=scroll_to_current_step,
         )
     stage = 0 if stage is None else stage
-    instructions = [
-        ("Aktívum firmy", "Vyberte firemné aktívum, ktorého sa incident týka. Profil organizácie je už nastavený."),
-        ("Incident", "Označte, kto incident spôsobil a čo sa stalo. Potom pokračujte k vyhodnoteniu."),
-        ("Vyhodnotenie", "Frekvenciu môžete ponechať predvyplnenú. Tlačidlo Vyhodnotiť a uložiť zobrazí výsledok."),
-    ]
-    title, instruction = instructions[stage]
-    st.html(f'<div class="atlas-step-guide stage-{stage}"><span class="atlas-step-number">{stage + 1}</span>'
-            f'<div><strong>Krok {stage + 1} z 3: {title}</strong><p>{instruction}</p></div></div>')
-    with st.expander("Ukážkový incident alebo nový formulár", icon=":material/science:"):
-        st.caption("Ukážka vytvorí simulovaný incident z otvorenej zraniteľnosti firmy HronTech.")
-        buttons = st.columns([1, 1])
-        buttons[0].button("Načítať ukážku", icon=":material/science:", on_click=fill_random_incident, width="stretch")
-        buttons[1].button("Začať odznova", icon=":material/restart_alt:", on_click=clear_form, width="stretch")
     simulation = st.session_state.get("simulation")
     if simulation:
-        st.html(f'<div class="rk-demo"><span class="atlas-demo-dot"></span><div><b>Simulovaný incident č. {simulation["id"]}: {esc(simulation["title"])}</b><br>{esc(simulation["description"])}</div></div>')
+        st.caption(f"Incident č. {simulation['id']}: {simulation['title']}")
 
     with st.container(key="incident_basics"):
         if stage == 0:
             profile = co.profile()
             st.html('<div class="atlas-form-heading"><h2>Dotknuté aktívum firmy</h2>'
-                    '<p>Hodnotenie sa týka výrobnej firmy HronTech. Odvetvie a veľkosť sa dopĺňajú automaticky.</p></div>')
+                    '</div>')
             st.caption(f"{profile['name']} · {profile['employees']} zamestnancov · Slovensko")
             inventory = co.assets()
             st.selectbox("Firemné aktívum", inventory.id.tolist(), index=None, key="company_asset",
@@ -740,7 +726,7 @@ def incident_form(options):
                     st.session_state["company_finding"] = None
                 st.selectbox("Súvisiaca zraniteľnosť (nepovinné)", candidates.id.tolist(), index=None, key="company_finding",
                              format_func=lambda value: f"{value} · {co.finding(value)['title']}", placeholder="Vyberte zistenie z evidencie", on_change=forget_demo)
-            st.button("Pokračovať k incidentu", type="primary", icon=":material/arrow_forward:", width="stretch",
+            st.button("Pokračovať k incidentu", type="primary", width="stretch",
                       on_click=change_intake_step, args=(1,))
 
         elif stage == 1:
@@ -751,7 +737,7 @@ def incident_form(options):
             st.html('<div class="atlas-field-divider"></div>')
             st.pills("Akým spôsobom incident vznikol?", options["akcia_typy"], selection_mode="multi", key=PREFIX + "akcia_typy",
                      format_func=pr.formatter("akcia_typy"), help=HELP["akcia_typy"], on_change=forget_demo)
-            with st.expander("Doplniť podrobnosti incidentu", icon=":material/tune:"):
+            with st.expander("Doplniť podrobnosti incidentu"):
                 st.caption("Zadajte iba overené údaje. Neznáme informácie nechajte prázdne.")
                 st.segmented_control("Cielenosť útoku", options["cielenost"], key=PREFIX + "cielenost",
                                      format_func=str.capitalize, on_change=forget_demo, width="stretch")
@@ -762,13 +748,13 @@ def incident_form(options):
                 st.toggle("Narušená dostupnosť", key=PREFIX + "atribut_availability", on_change=forget_demo,
                           help="Údaje alebo služba neboli dostupné.")
             back, forward = st.columns([1, 1.8])
-            back.button("Späť", icon=":material/arrow_back:", on_click=change_intake_step, args=(0,), width="stretch")
-            forward.button("Pokračovať k vyhodnoteniu", type="primary", icon=":material/arrow_forward:",
+            back.button("Späť", on_click=change_intake_step, args=(0,), width="stretch")
+            forward.button("Pokračovať k vyhodnoteniu", type="primary",
                            on_click=change_intake_step, args=(2,), width="stretch")
 
         else:
             st.html('<div class="atlas-form-heading"><h2>Nastavenie hodnotenia</h2>'
-                    '<p>Nastavte ročnú frekvenciu podobných incidentov. Názov je nepovinný.</p></div>')
+                    '</div>')
             row = op.to_row(model_input(form_values()))
             pair = (row["odvetvie"], row["vzor_utoku"])
             default = simulation["frequency"] if simulation else op.default_frequency(*pair)
@@ -781,13 +767,11 @@ def incident_form(options):
             st.caption(f"Predvolený odhad pre toto odvetvie je {decimal(default)} incidentu ročne. Hodnotu môžete upraviť.")
             st.text_input("Názov hodnotenia", key=PREFIX + "nazov", max_chars=200,
                           placeholder="Napríklad Neoprávnený prístup do e-shopu", help="Nepovinné. Pomôže vám nájsť výsledok v histórii.")
-            st.caption("Frekvencia je predpoklad simulácie. Pri ručnom incidente sa predvyplní historický podiel vzoru vo výrobe.")
             with st.container(key="evaluate"):
-                st.button("Vyhodnotiť a uložiť", type="primary", icon=":material/shield:", width="stretch", on_click=evaluate)
-            st.html('<div class="atlas-form-footnote">Výsledok sa uloží do histórie. Finančný odhad vychádza z modelových predpokladov.</div>')
+                st.button("Vyhodnotiť a uložiť", type="primary", width="stretch", on_click=evaluate)
             for error in st.session_state.get("chyby", []):
-                st.error(error, icon=":material/error:")
-            st.button("Späť k incidentu", icon=":material/arrow_back:", on_click=change_intake_step, args=(1,))
+                st.error(error)
+            st.button("Späť k incidentu", on_click=change_intake_step, args=(1,))
 
 
 def new_assessment_tab():
@@ -795,15 +779,15 @@ def new_assessment_tab():
     init_form()
     with st.container(key="assessment_workspace"):
         if "vysledok" in st.session_state:
-            st.success("Hodnotenie je dokončené a uložené. Nižšie je odhad dopadu a odporúčané opatrenie.", icon=":material/check_circle:")
+            st.success("Hodnotenie uložené.")
             with st.container(key="has_result"):
                 show_result(*st.session_state["vysledok"])
-            st.button("Upraviť vstupné údaje", icon=":material/edit:", on_click=edit_assessment)
-            st.button("Začať odznova", icon=":material/add:", on_click=clear_form)
+            st.button("Upraviť vstupné údaje", on_click=edit_assessment)
+            st.button("Začať odznova", on_click=clear_form)
         else:
             with st.container(key="intake"):
                 incident_form(options)
-            with st.expander("Skontrolovať zadané údaje", icon=":material/checklist:"):
+            with st.expander("Skontrolovať zadané údaje"):
                 empty_result()
     if st.session_state.pop("scroll_to_step", False):
         st.html(
@@ -841,7 +825,7 @@ def readable_input(raw):
 def records_tab():
     records = co.assessments()
     if records.empty:
-        st.html(f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Zatiaľ žiadne hodnotenia</h4>'
+        st.html(f'<div class="rk-empty"><h4>Zatiaľ žiadne hodnotenia</h4>'
                 '<p>V časti Nové hodnotenie zadajte incident alebo načítajte ukážku z testovacích dát.</p></div>')
         st.button("Vytvoriť prvé hodnotenie", type="primary", on_click=lambda: st.session_state.update(workspace_page="Nové hodnotenie"))
         return
@@ -855,7 +839,7 @@ def records_tab():
     if impact != "Všetky dopady":
         records = records[records["predikovany_dopad"] == impact].copy()
     if records.empty:
-        st.info("Žiadne hodnotenie nezodpovedá filtru. Zmeňte hľadaný text alebo vyberte všetky dopady.")
+        st.caption("Filtru nezodpovedá žiadne hodnotenie.")
         return
 
     records.insert(0, "priorita", range(1, len(records) + 1))
@@ -902,23 +886,23 @@ def records_tab():
 
     left, right = st.columns([1.3, 1], gap="large")
     with left:
-        with st.expander("Vstup hodnotenia", icon=":material/description:"):
+        with st.expander("Vstup hodnotenia"):
             chosen = st.selectbox("Hodnotenie", records["id"], format_func=lambda value: f"č. {value}")
             st.markdown(readable_input(records.loc[records["id"] == chosen, "vstup"].iloc[0]))
         st.download_button("Stiahnuť ako CSV", records.to_csv(index=False).encode("utf-8-sig"), file_name="hodnotenia.csv",
-                           mime="text/csv", icon=":material/download:")
+                           mime="text/csv")
     with right:
         labels = {
             row.id: f"{row.priorita}. č. {row.id}{' ' + row.nazov if row.nazov else ''} "
                     f"({row.odvetvie}, {row.vzor_utoku}, {euro(row.ocakavana_strata)})"
             for row in records.itertuples()
         }
-        with st.expander("Vymazať hodnotenia", icon=":material/delete:"):
+        with st.expander("Vymazať hodnotenia"):
             with st.form("delete_records", border=False):
                 to_delete = st.multiselect("Hodnotenia na vymazanie", list(labels), format_func=labels.get,
                                            placeholder="Vyberte hodnotenia")
                 delete_all = st.checkbox("Vymazať všetky zobrazené hodnotenia")
-                if st.form_submit_button("Vymazať", icon=":material/delete:"):
+                if st.form_submit_button("Vymazať"):
                     ids = list(labels) if delete_all else to_delete
                     if ids:
                         op.delete_assessments(ids)
@@ -931,7 +915,7 @@ def overview_tab():
     """Grafy z uložených hodnotení. Obnovujú sa každých 5 sekúnd, aby bolo vidieť aj hodnotenia z API."""
     records = co.assessments()
     if records.empty:
-        st.html(f'<div class="rk-empty"><div class="rk-empty-icon">{SHIELD}</div><h4>Zatiaľ nie je čo zobraziť</h4>'
+        st.html(f'<div class="rk-empty"><h4>Zatiaľ nie je čo zobraziť</h4>'
                 '<p>Grafy sa objavia po prvom hodnotení. Pridajte ho v časti Nové hodnotenie, tlačidlom '
                 '<b>Načítať ukážku</b> alebo cez API.</p></div>')
         st.button("Vytvoriť prvé hodnotenie", type="primary", on_click=lambda: st.session_state.update(workspace_page="Nové hodnotenie"))
@@ -1045,7 +1029,7 @@ def budget_section():
         st.caption("Z tohto rozpočtu sa nepokryje žiadny scenár. Najlacnejšie prvé opatrenie stojí "
                    f"{euro(curves[op.BUDGET_ORDERS[0]]['cena (€)'].iloc[0])}.")
         return
-    with st.expander(f"Scenáre pokryté z rozpočtu {euro(budget)} ({len(covered)})", icon=":material/checklist:"):
+    with st.expander(f"Scenáre pokryté z rozpočtu {euro(budget)} ({len(covered)})"):
         st.dataframe(
             covered.style.format({"cena (€)": euro, "znížená strata (€)": euro, "rozpočet (€)": euro}),
             hide_index=True, width="stretch",
@@ -1079,7 +1063,6 @@ def assumptions_tab():
     st.warning(
         "Dataset neobsahuje ceny ani účinnosť opatrení. Hodnoty nižšie sú predpoklady pre modelovú organizáciu "
         "a pri skutočnom použití ich treba nahradiť údajmi organizácie.",
-        icon=":material/info:",
     )
     with st.expander("Ako čítať predikciu a odporúčanie", expanded=True):
         st.markdown(
@@ -1163,6 +1146,6 @@ load_context()
     "Uložené hodnotenia": records_tab,
     "Prehľad": overview_tab,
     "Register rizík": company_ui.planning_page,
-    "Predpoklady": company_ui.assumptions_page,
+    "Predpoklady": company_ui.settings_page,
 }[page]()
 ui.footer()

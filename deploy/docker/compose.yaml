@@ -1,9 +1,11 @@
 x-common: &common
-  build: .
+  build:
+    context: ../..
+    dockerfile: deploy/docker/Dockerfile
   image: hodnotenie-rizika
   volumes:
     # Dáta a modely z notebookov zostávajú na disku mimo kontajnera
-    - ./data:/app/data
+    - ../../data:/app/data
     # Databáza hodnotení je vo volume Dockeru, kde spoľahlivo funguje zamykanie SQLite
     - runtime:/app/runtime
   environment:
@@ -20,7 +22,7 @@ services:
   api:
     <<: *common
     container_name: hodnotenie-rizika-api
-    command: ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "hrontech.api:app", "--host", "0.0.0.0", "--port", "8000"]
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
@@ -35,7 +37,7 @@ services:
   simulacia:
     <<: *common
     container_name: hodnotenie-rizika-simulacia
-    command: ["python", "simulacia.py"]
+    command: ["python", "-m", "scripts.simulacia"]
     environment:
       SIMULACIA_API: http://api:8000
     profiles: ["simulacia"]

@@ -10,7 +10,7 @@ from pathlib import Path
 VCDB_COMMIT = "5ebf2f5be85d03ff7e7455f254a3e7d1d7fd671c"
 VCDB_URL = f"https://raw.githubusercontent.com/vz-risk/VCDB/{VCDB_COMMIT}/data/joined/vcdb.json.zip"
 VCDB_SHA256 = "e4be5dd432ccfad16520a6b60dd83e9d47c63b0f3352c26c4d43a5dd774c32c0"
-VCDB_PATH = Path(__file__).parent / "data" / "raw" / "vcdb" / "vcdb.json.zip"
+VCDB_PATH = Path(__file__).resolve().parents[1] / "data" / "raw" / "vcdb" / "vcdb.json.zip"
 
 
 def sha256(path: Path) -> str:

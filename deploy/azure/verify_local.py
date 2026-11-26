@@ -8,10 +8,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fastapi.testclient import TestClient
 
-import opatrenia as op
-import firma as co
-import simulacia
-from azure_app import app
+from hrontech import opatrenia as op
+from hrontech import firma as co
+from scripts import simulacia
+from hrontech.server import app
 
 with tempfile.TemporaryDirectory() as directory:
     path = Path(directory) / "test.db"

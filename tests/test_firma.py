@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import firma as co
-import opatrenia as op
+from hrontech import firma as co
+from hrontech import opatrenia as op
 import pandas as pd
 
 
@@ -107,8 +107,8 @@ class CompanyTests(unittest.TestCase):
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM company_assessments").fetchone()[0], 0)
 
     def test_upstream_generator_payload_works_with_company_api(self):
-        import api
-        import simulacia
+        from hrontech import api
+        from scripts import simulacia
 
         case = co.start_simulation("portal")
         payload = simulacia.incident_body(case)
@@ -121,8 +121,8 @@ class CompanyTests(unittest.TestCase):
         self.assertEqual(saved.case_id, case["id"])
 
     def test_known_impact_metadata_does_not_change_prediction(self):
-        import api
-        import simulacia
+        from hrontech import api
+        from scripts import simulacia
 
         case = co.start_simulation("portal")
         payload = simulacia.incident_body(case)

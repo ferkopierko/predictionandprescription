@@ -14,11 +14,11 @@ Analógia s údržbou: incident je porucha, vzor útoku typ poruchy, dopad záva
 
 ## Dáta
 
-**VERIS Community Database (VCDB)**: 10 047 verejne známych incidentov (licencia CC BY-SA 4.0), verzia pripnutá na commit `5ebf2f5` a overená kontrolným súčtom. Každý incident opisuje aktéra, spôsob útoku, aktívum a narušený atribút, pri úniku dát aj počet záznamov. Notebook [priprava_dat.ipynb](priprava_dat.ipynb) dáta vyčistí (duplikáty, nepotvrdené a nevhodné incidenty), rozbalí do tabuľky a priradí vzory útokov a opatrenia CIS.
+**VERIS Community Database (VCDB)**: 10 047 verejne známych incidentov (licencia CC BY-SA 4.0), verzia pripnutá na commit `5ebf2f5` a overená kontrolným súčtom. Každý incident opisuje aktéra, spôsob útoku, aktívum a narušený atribút, pri úniku dát aj počet záznamov. Notebook [priprava_dat.ipynb](../analysis/priprava_dat.ipynb) dáta vyčistí (duplikáty, nepotvrdené a nevhodné incidenty), rozbalí do tabuľky a priradí vzory útokov a opatrenia CIS.
 
 ## Predikcia
 
-Notebook [predikcia.ipynb](predikcia.ipynb) porovnáva **logistickú regresiu** a **LightGBM**. Dáta sa delia podľa zdroja incidentu, aby takmer rovnaké incidenty neboli v tréningu aj v teste. Vstupom nie sú údaje, ktoré by prezradili výsledok (popis, počet záznamov).
+Notebook [predikcia.ipynb](../analysis/predikcia.ipynb) porovnáva **logistickú regresiu** a **LightGBM**. Dáta sa delia podľa zdroja incidentu, aby takmer rovnaké incidenty neboli v tréningu aj v teste. Vstupom nie sú údaje, ktoré by prezradili výsledok (popis, počet záznamov).
 
 | Metrika (test, 1 052 incidentov) | Triviálny model | Logistická regresia | LightGBM |
 | --- | ---: | ---: | ---: |
@@ -31,7 +31,7 @@ V aplikácii sa používa LightGBM, lebo má lepšie kalibrované pravdepodobnos
 
 ## Preskripcia
 
-Notebook [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) vyhodnotí 48 scenárov (6 odvetví × 8 vzorov útokov). Pre každý vyberie opatrenie s najnižšími celkovými ročnými nákladmi:
+Notebook [preskriptivna_udrzba.ipynb](../analysis/preskriptivna_udrzba.ipynb) vyhodnotí 48 scenárov (6 odvetví × 8 vzorov útokov). Pre každý vyberie opatrenie s najnižšími celkovými ročnými nákladmi:
 
 ```
 celkové_náklady = cena_opatrenia + očakávaná_strata × (zostatok po opatrení, upravený o čas zavedenia)
@@ -71,12 +71,12 @@ Generátor nemonitoruje ani nenapáda reálnu sieť. Živé sledovanie sa obnovu
 Príprava prostredia a notebookov je opísaná v README. Po vygenerovaní dát a modelu:
 
 ```powershell
-streamlit run app.py
-uvicorn api:app --host 127.0.0.1 --port 8000
-python simulacia.py --pocet 10 --interval 3 --seed 67
+python -m streamlit run hrontech/ui/app.py
+uvicorn hrontech.api:app --host 127.0.0.1 --port 8000
+python -m scripts.simulacia --pocet 10 --interval 3 --seed 67
 ```
 
-S Dockerom: `docker compose --profile simulacia up -d --build`. Bez profilu sa spustí iba web a API. Adresy sú <http://localhost:8501> a <http://localhost:8000/docs>. Dáta SQLite sa zachovajú po reštarte.
+S Dockerom: `docker compose -f deploy/docker/compose.yaml --profile simulacia up -d --build`. Bez profilu sa spustí iba web a API. Adresy sú <http://localhost:8501> a <http://localhost:8000/docs>. Dáta SQLite sa zachovajú po reštarte.
 
 ## Overenie a obmedzenia
 

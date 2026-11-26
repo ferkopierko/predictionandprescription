@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from frontend import PAGES
+from hrontech.ui.frontend import PAGES, SECTIONS
 
 import requests
 from streamlit.proto.BackMsg_pb2 import BackMsg
@@ -30,7 +30,7 @@ with connect(BASE.replace("https:", "wss:") + "/_stcore/stream",
              additional_headers={"Cookie": cookies},
              open_timeout=60, close_timeout=5, max_size=16 * 1024 * 1024) as websocket:
     radio_id = None
-    pages = ["Firma", "Simulácia", "Živé sledovanie", "Nové hodnotenie", "Uložené hodnotenia", "Prehľad", "Register rizík", "Predpoklady"]
+    pages = list(SECTIONS)
     for index, page in enumerate(pages):
         request = BackMsg()
         request.rerun_script.query_string = ""
@@ -50,7 +50,7 @@ with connect(BASE.replace("https:", "wss:") + "/_stcore/stream",
                 element = message.delta.new_element
                 if element.HasField("exception"):
                     errors.append(element.exception.message)
-                if element.HasField("html") and PAGES[page][0] in element.html.body:
+                if element.HasField("html") and PAGES[SECTIONS[page]][0] in element.html.body:
                     rendered_title = True
                 if element.HasField("radio") and element.radio.label == "Pracovný priestor":
                     radio_id = element.radio.id

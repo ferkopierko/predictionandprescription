@@ -7,7 +7,7 @@ from functools import partial
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from provision_sql import admin_connection
-from simulacia import call as api_call, incident_body
+from scripts.simulacia import call as api_call, incident_body
 
 call = partial(api_call, timeout=60)
 BASE = "https://safetyfirst-hrontech-54c15147.azurewebsites.net"

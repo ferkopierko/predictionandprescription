@@ -5,8 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import firma as co
-import opatrenia as op
+from hrontech import firma as co
+from hrontech import opatrenia as op
 from provision_sql import admin_connection
 
 assert op.uses_azure_sql(), "Nastavte AZURE_SQL_CONNECTION_STRING pre databazu papu-hrontech"

@@ -56,7 +56,7 @@ Navyše vieme, v akom odvetví a akej veľkej firme sa to stalo a pri úniku dá
 
 ## 3. Krok 2: čistenie a úprava dát
 
-Notebook [priprava_dat.ipynb](priprava_dat.ipynb). Najprv sa zisťuje, aké problémy dáta majú, a až potom sa čistia:
+Notebook [priprava_dat.ipynb](../analysis/priprava_dat.ipynb). Najprv sa zisťuje, aké problémy dáta majú, a až potom sa čistia:
 
 1. **Duplikáty.** Identifikátor `incident_id` sa opakuje, ale väčšinou ide o rôzne incidenty. Preto sa mažú iba úplne rovnaké záznamy (2).
 2. **Nepotvrdené incidenty.** „Podozrenie“ alebo „takmer incident“ nie je incident, preto sa vyhodí (81).
@@ -78,7 +78,7 @@ Potom sa doplnia nové stĺpce:
 
 ## 4. Krok 3: ako sa model učí predikovať dopad
 
-Notebook [predikcia.ipynb](predikcia.ipynb).
+Notebook [predikcia.ipynb](../analysis/predikcia.ipynb).
 
 ### Otázka, na ktorú model odpovedá
 
@@ -128,7 +128,7 @@ Oba modely sú v triedení prakticky rovnako dobré, rozdiel je v rámci náhody
 
 ## 5. Krok 4: ako sa z predikcie stane odporúčanie
 
-Notebook [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb).
+Notebook [preskriptivna_udrzba.ipynb](../analysis/preskriptivna_udrzba.ipynb).
 
 ### Scenáre
 
@@ -204,11 +204,11 @@ Pre porovnanie, pri zdravotníctve a krádeži zariadení je riziko 112 tis. €
 | Súbor | Úloha | Číta | Zapisuje |
 | --- | --- | --- | --- |
 | [vcdb_data.py](vcdb_data.py) | stiahne a overí VCDB | internet | `data/raw/vcdb/vcdb.json.zip` |
-| [priprava_dat.ipynb](priprava_dat.ipynb) | čistenie, analýza, grafy 1 a 2 | VCDB | `vcdb_clean.csv`, `vcdb_opatrenia_cis.csv` |
+| [priprava_dat.ipynb](../analysis/priprava_dat.ipynb) | čistenie, analýza, grafy 1 a 2 | VCDB | `vcdb_clean.csv`, `vcdb_opatrenia_cis.csv` |
 | [vcdb_model.py](vcdb_model.py) | príprava znakov pre model | – | – |
-| [predikcia.ipynb](predikcia.ipynb) | 2 modely, metriky, grafy 3 a 4 | `vcdb_clean.csv` | `vcdb_predikcie.csv`, `model_dopad_vcdb.joblib` |
-| [predikcia_70_30.ipynb](predikcia_70_30.ipynb) | jednoduchšia úloha, grafy 5 a 6 | `vcdb_clean.csv` | – |
-| [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb) | odporúčania, grafy 7 až 9 | všetky 3 CSV vyššie | `vcdb_register_rizik.csv` |
+| [predikcia.ipynb](../analysis/predikcia.ipynb) | 2 modely, metriky, grafy 3 a 4 | `vcdb_clean.csv` | `vcdb_predikcie.csv`, `model_dopad_vcdb.joblib` |
+| [predikcia_70_30.ipynb](../analysis/predikcia_70_30.ipynb) | jednoduchšia úloha, grafy 5 a 6 | `vcdb_clean.csv` | – |
+| [preskriptivna_udrzba.ipynb](../analysis/preskriptivna_udrzba.ipynb) | odporúčania, grafy 7 až 9 | všetky 3 CSV vyššie | `vcdb_register_rizik.csv` |
 | [app.py](app.py), [api.py](api.py), [opatrenia.py](opatrenia.py) | webová aplikácia a REST API | `model_dopad_vcdb.joblib`, všetky 3 CSV vyššie | SQLite databáza `hodnotenia` |
 
 Funkcie na prípravu znakov sú v samostatnom súbore [vcdb_model.py](vcdb_model.py), aby sa uložený model dal načítať aj mimo notebooku, napríklad v aplikácii.
@@ -242,7 +242,7 @@ Triedy sú nevyvážené. Triviálny model má accuracy 40 %, ale nezachytí ani
 Lebo preskripcia počíta s pravdepodobnosťami a tie má LightGBM spoľahlivo lepšie (log loss nižší, 95 % interval rozdielu neobsahuje nulu). Výber bol urobený podľa krížovej validácie, nie podľa testu.
 
 **Prečo delíte dáta podľa zdroja a nie náhodne?**
-Incidenty z jedného článku sú takmer rovnaké. Pri náhodnom delení by model v teste „spoznal“ incidenty z tréningu a výsledok by bol prikrášlený. Náhodné delenie 70:30 je pre porovnanie v [predikcia_70_30.ipynb](predikcia_70_30.ipynb).
+Incidenty z jedného článku sú takmer rovnaké. Pri náhodnom delení by model v teste „spoznal“ incidenty z tréningu a výsledok by bol prikrášlený. Náhodné delenie 70:30 je pre porovnanie v [predikcia_70_30.ipynb](../analysis/predikcia_70_30.ipynb).
 
 **Kde ste vzali ceny opatrení a straty?**
 Dataset ich neobsahuje, sú to predpoklady pre modelovú organizáciu. Preto je súčasťou analýza citlivosti: aj pri polovičných alebo dvojnásobných hodnotách riešenie vždy prekonalo jednoduché stratégie. Dôležité je poradie a logika rozhodovania, nie presné sumy.

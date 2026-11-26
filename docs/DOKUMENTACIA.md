@@ -45,7 +45,7 @@ Dáta sa do repozitára neukladajú. Modul [vcdb_data.py](vcdb_data.py) ich stia
 
 ## 3. Príprava dát
 
-Notebook: [priprava_dat.ipynb](priprava_dat.ipynb)
+Notebook: [priprava_dat.ipynb](../analysis/priprava_dat.ipynb)
 
 ### 3.1 Kontrola kvality
 
@@ -142,7 +142,7 @@ Každému vzoru útoku sú priradené opatrenia z rámca **CIS Controls v8** (sp
 
 ## 4. Prediktívna časť
 
-Notebooky: [predikcia.ipynb](predikcia.ipynb) (hlavný), [predikcia_70_30.ipynb](predikcia_70_30.ipynb) (doplnkový)
+Notebooky: [predikcia.ipynb](../analysis/predikcia.ipynb) (hlavný), [predikcia_70_30.ipynb](../analysis/predikcia_70_30.ipynb) (doplnkový)
 
 ### 4.1 Úloha
 
@@ -216,7 +216,7 @@ Vysoký dopad predikujú najmä stratené zálohovacie pásky a disky, odvetvie 
 
 ### 4.6 Doplnková úloha: 2 triedy a rozdelenie 70:30
 
-[predikcia_70_30.ipynb](predikcia_70_30.ipynb) rieši zjednodušenú úlohu `nízky alebo stredný` proti `vysoký` s náhodným rozdelením 70:30 (seed 67). Test má 1 530 incidentov.
+[predikcia_70_30.ipynb](../analysis/predikcia_70_30.ipynb) rieši zjednodušenú úlohu `nízky alebo stredný` proti `vysoký` s náhodným rozdelením 70:30 (seed 67). Test má 1 530 incidentov.
 
 | Metrika | Triviálny model | Logistická regresia | LightGBM |
 | --- | ---: | ---: | ---: |
@@ -230,7 +230,7 @@ Tu má LightGBM spoľahlivo vyššie macro F1 (rozdiel 0,033, interval [0,011; 0
 
 ## 5. Preskriptívna časť
 
-Notebook: [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb)
+Notebook: [preskriptivna_udrzba.ipynb](../analysis/preskriptivna_udrzba.ipynb)
 
 ### 5.1 Scenáre rizika
 
@@ -387,7 +387,7 @@ jupyter nbconvert --to notebook --execute --inplace predikcia_70_30.ipynb
 jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
 ```
 
-Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predchádzajúceho. Aplikácia a API: `docker compose up -d --build`, podrobnosti v [README.md](README.md).
+Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predchádzajúceho. Aplikácia a API: `docker compose -f deploy/docker/compose.yaml up -d --build`, podrobnosti v [README.md](README.md).
 
 ## 8. Splnenie požiadaviek zadania
 

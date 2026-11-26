@@ -18,16 +18,16 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from vcdb_model import CATEGORICAL, FLAGS, LABELS, MULTI, calibrated_probabilities
+from hrontech.vcdb_model import CATEGORICAL, FLAGS, LABELS, MULTI, calibrated_probabilities
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parents[1]
 PROCESSED = ROOT / "data" / "processed"
 CLEAN_PATH = PROCESSED / "vcdb_clean.csv"
 PREDICTIONS_PATH = PROCESSED / "vcdb_predikcie.csv"
 CONTROLS_PATH = PROCESSED / "vcdb_opatrenia_cis.csv"
 REGISTER_PATH = PROCESSED / "vcdb_register_rizik.csv"
 MODEL_PATH = PROCESSED / "model_dopad_vcdb.joblib"
-FIGURES_DIR = ROOT / "figures"
+FIGURES_DIR = ROOT / "analysis" / "figures"
 DB_PATH = Path(os.environ.get("HODNOTENIA_DB", PROCESSED / "hodnotenia.db"))
 
 REQUIRED_FILES = [CLEAN_PATH, PREDICTIONS_PATH, CONTROLS_PATH, REGISTER_PATH, MODEL_PATH]
@@ -94,6 +94,10 @@ def missing_files():
 @lru_cache(maxsize=1)
 def context():
     """Načíta dáta, model a možnosti formulára. Výsledok sa načíta iba raz za beh procesu."""
+    # Existing local models may reference the module name used before packaging.
+    import sys
+    from hrontech import vcdb_model
+    sys.modules.setdefault("vcdb_model", vcdb_model)
     clean = pd.read_csv(CLEAN_PATH, low_memory=False)
     controls = pd.read_csv(CONTROLS_PATH)
     representative = clean[clean["reprezentativny"]]

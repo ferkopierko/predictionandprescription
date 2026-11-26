@@ -31,9 +31,9 @@ GitHub sa prihlasuje cez OIDC a user-assigned identitu `hrontech-github-deploy`.
 
 Stav: https://github.com/ferkopierko/predictionandprescription/actions/workflows/deploy-hrontech.yml
 
-Pôvodná verzia `579ccb7`, história, rozpracovaná pracovná kópia a konzistentná lokálna databáza boli pred nahradením zálohované na PC do `C:\Users\samoo\Documents\PaPU\zalohy\pred-hrontech-2026-11-26-210802`.
+Pôvodná verzia `579ccb7`, história, rozpracovaná pracovná kópia a konzistentná lokálna databáza boli pred nahradením zálohované na PC do `PaPU\zalohy\pred-hrontech-2026-11-26-210802`.
 
-`azure_app.py` spojí pôvodné REST API a Streamlit cez `st.App` do jedného procesu. `startup.sh` spúšťa jeden Uvicorn worker na porte 8000; viac workerov by rozdeľovalo Streamlit relácie v pamäti. Úpravy v `opatrenia.py` a `firma.py` pridávajú podporu Azure SQL pri zachovaní lokálneho SQLite režimu.
+`hrontech/server.py` spojí pôvodné REST API a Streamlit cez `st.App` do jedného procesu. `startup.sh` spúšťa jeden Uvicorn worker na porte 8000; viac workerov by rozdeľovalo Streamlit relácie v pamäti. Úpravy v `opatrenia.py` a `firma.py` pridávajú podporu Azure SQL pri zachovaní lokálneho SQLite režimu.
 
 Z koreňa tejto pracovnej kópie s pripravenými piatimi súbormi `data/processed/`:
 
@@ -52,13 +52,13 @@ Balík obsahuje iba potrebný Python kód, produkčné závislosti, vzhľad, obr
 - `python -m unittest discover -s tests -v`: 13 pôvodných testov firmy.
 - `python deploy/azure/verify_local.py`: SQLite, spoločný ASGI server, všetky firemné API a hodnotenie. Testovací klient vyžaduje `pip install httpx2`.
 - `verify_company_sql.py`: skutočný SQL zápis aktíva a zistenia, zmena stavu, simulácia, vyhodnotenie, úprava nastavení, kaskádové vymazanie; testovacie zmeny sa upracú. Vyžaduje administračný prístup a je určený na kontrolu pred sprístupnením dema.
-- Streamlit AppTest: všetkých osem stránok bez výnimiek.
-- `python deploy/azure/verify_remote.py`: verejné HTTP API a vykreslenie všetkých ôsmich stránok cez WebSocket.
+- Streamlit AppTest: všetkých šesť sekcií bez výnimiek.
+- `python deploy/azure/verify_remote.py`: verejné HTTP API a vykreslenie všetkých šiestich sekcií cez WebSocket.
 
 Generátor možno spustiť aj lokálne proti novému webu:
 
 ```powershell
-python simulacia.py --api https://safetyfirst-hrontech-54c15147.azurewebsites.net --pocet 10 --interval 3 --seed 67
+python -m scripts.simulacia --api https://safetyfirst-hrontech-54c15147.azurewebsites.net --pocet 10 --interval 3 --seed 67
 ```
 
 Trvalý generátor nie je automaticky spustený; jednotlivé situácie sa dajú vytvárať priamo na stránke Simulácia.

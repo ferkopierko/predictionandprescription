@@ -1,0 +1,109 @@
+:root { --rk-ink:#252c32; --rk-surface:#fff; --rk-surface-2:#f3f5f6; --rk-border:#dde2e6; --rk-muted:#65717b; --rk-primary:#35586f; --rk-primary-soft:#edf2f6; --rk-low:#38684c; --rk-low-bg:#eff5f0; --rk-mid:#8b652e; --rk-mid-bg:#faf4e8; --rk-high:#a74646; --rk-high-bg:#fbefef; }
+[data-testid="stAppDeployButton"],#MainMenu,[data-testid="stDecoration"] {display:none!important}
+header[data-testid="stHeader"] {background:transparent;height:0}
+[data-testid="stToolbar"] {pointer-events:none}
+[data-testid="stToolbar"] button {visibility:hidden}
+[data-testid="stToolbar"] [data-testid="stExpandSidebarButton"] {visibility:visible;pointer-events:auto;background:white;border:1px solid var(--rk-border);margin:.4rem}
+[data-testid="stAppViewContainer"],[data-testid="stMain"] {background:#f6f7f8;color:var(--rk-ink)}
+[data-testid="stMainBlockContainer"] {max-width:1280px;padding:2rem 2.8rem}
+[data-testid="stVerticalBlock"] {gap:1rem}
+h1,h2,h3,h4 {color:var(--rk-ink)}
+h2,h3 {letter-spacing:-.02em;font-size:1.15rem;font-weight:550;line-height:1.35}
+button,input,textarea {font-family:inherit}
+button:focus-visible,input:focus-visible,a:focus-visible {outline:2px solid #35586f!important;outline-offset:3px}
+[data-testid="stButton"] button,[data-testid="stDownloadButton"] button {min-height:40px;border-radius:5px;font-weight:500}
+[data-testid="stButton"] button[kind="primary"] {background:var(--rk-primary);border-color:var(--rk-primary);color:white}
+[data-testid="stButton"] button[kind="primary"]:hover {background:#28475c}
+[data-testid="stWidgetLabel"] p {font-size:.9rem;font-weight:500}
+[data-testid="stExpander"] {background:white;border-color:var(--rk-border);border-radius:6px}
+[data-testid="stDialog"] [role="dialog"] {border-radius:10px;max-width:700px}
+[data-testid="stSidebar"] {background:#fff;border-right:1px solid var(--rk-border);min-width:210px;max-width:210px}
+[data-testid="stSidebarContent"] {background:#fff}
+[data-testid="stSidebar"][data-collapsed="true"] {min-width:0!important;max-width:0!important;width:0!important;overflow:hidden}
+[data-testid="stSidebarHeader"] {height:2rem;min-height:2rem}
+[data-testid="stSidebarUserContent"] {padding:1rem .2rem}
+.atlas-brand {padding:0 .6rem 1.5rem;font-size:1.4rem;font-weight:600;color:#293c4a;letter-spacing:-.04em}
+.atlas-brand span {display:block;font-size:.85rem;font-weight:400;color:var(--rk-muted);letter-spacing:0;margin-top:.15rem}
+[data-testid="stSidebar"] [role="radiogroup"] {gap:4px}
+[data-testid="stSidebar"] [role="radiogroup"] label {padding:.65rem .8rem;margin:0;width:100%;border-radius:5px;color:#56616a}
+[data-testid="stSidebar"] [role="radiogroup"] label>div>div:first-child {display:none}
+[data-testid="stSidebar"] [role="radiogroup"] label:has(input:checked) {background:#edf2f6;color:#233f53;box-shadow:inset 2px 0 #35586f}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {background:#f3f5f7}
+[data-testid="stSidebar"] [role="radiogroup"] p {font-size:.92rem;font-weight:500;color:inherit}
+.atlas-page-header {padding:.3rem 0 .7rem}
+.atlas-page-header h1 {font-size:1.8rem;line-height:1.2;letter-spacing:-.035em;font-weight:550;margin:0;padding:0}
+[data-testid="stMetric"] {border-bottom:1px solid var(--rk-border);padding:.2rem 0 1rem}
+[data-testid="stMetricValue"] {font-size:1.5rem;font-weight:500}
+.company-asset-detail {display:grid;grid-template-columns:1.2fr 1fr 1.2fr;gap:1rem;padding:1rem;background:white;border:1px solid var(--rk-border);border-radius:6px}
+.company-asset-detail span {display:block;color:var(--rk-muted);font-size:.78rem;margin-bottom:.3rem}
+.company-asset-detail strong {font-size:.9rem;font-weight:500;overflow-wrap:anywhere}
+.company-finding {padding:1.2rem;background:#fff;border:1px solid var(--rk-border);border-radius:6px}
+.company-finding h3 {font-size:1.15rem;padding:.4rem 0;margin:0}
+.company-finding p {font-size:.92rem;line-height:1.55;margin:.4rem 0}
+.company-severity {font-size:.8rem;color:var(--rk-mid);font-weight:500}
+.st-key-assessment_workspace {max-width:900px}
+.st-key-incident_basics {background:white;border:1px solid var(--rk-border);border-radius:6px;padding:1.4rem}
+.atlas-form-heading h2 {font-size:1.15rem;font-weight:550;padding:0;margin:0 0 .6rem}
+.atlas-form-heading p {font-size:.9rem;color:var(--rk-muted);line-height:1.5;margin:0}
+.atlas-field-divider {height:1px;background:var(--rk-border);margin:.3rem 0}
+.atlas-pattern {padding:.7rem 0;border-bottom:1px solid var(--rk-border)}
+.atlas-pattern>span {display:block;color:var(--rk-muted);font-size:.8rem}
+.atlas-pattern>strong {display:block;font-weight:500;margin-top:.3rem}
+.rk-demo {padding:.7rem 0;font-size:.9rem;border-bottom:1px solid var(--rk-border)}
+.rk-demo br {display:none}
+.atlas-step-guide,.atlas-report-symbol,.atlas-demo-dot,.rk-empty-icon {display:none}
+.atlas-empty-report {padding:1.2rem;background:white}
+.atlas-empty-report h3 {font-size:1.1rem;margin:0 0 .5rem;padding:0}
+.atlas-summary-row {padding:.7rem 0;border-bottom:1px solid var(--rk-border)}
+.atlas-summary-row>span {display:block;font-size:.8rem;color:var(--rk-muted)}
+.atlas-summary-row strong {display:block;font-size:.9rem;font-weight:500;margin-top:.25rem}
+.atlas-report-explanation {font-size:.85rem;margin-top:1rem;color:var(--rk-muted)}
+.atlas-readiness-track {height:3px;background:#e6e9eb;margin:.7rem 0}
+.atlas-readiness-track i {height:100%;display:block;background:var(--rk-primary)}
+.atlas-form-footnote,.atlas-progress-label {font-size:.8rem;color:var(--rk-muted)}
+.rk-hero {background:white;border:1px solid var(--rk-border);border-radius:6px;overflow:hidden}
+.rk-hero-top {display:flex;justify-content:space-between;flex-wrap:wrap;padding:.8rem 1.2rem;border-bottom:1px solid var(--rk-border);font-size:.82rem;color:var(--rk-muted)}
+.rk-tag {font-size:.78rem;color:var(--rk-muted)}
+.rk-reco {padding:1.1rem 1.2rem}
+.rk-label {font-size:.8rem;color:var(--rk-muted)}
+.rk-reco-name {font-size:1.5rem;line-height:1.2;font-weight:550;letter-spacing:-.035em;margin:.4rem 0 .6rem}
+.rk-reco-text {font-size:.9rem;line-height:1.55}
+.rk-cis {display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.7rem}
+.rk-cis span {background:#f2f4f5;padding:.15rem .4rem;border-radius:3px;font-size:.76rem}
+.rk-kpis {display:grid;grid-template-columns:repeat(auto-fit,minmax(min(160px,100%),1fr));border-top:1px solid var(--rk-border);border-bottom:1px solid var(--rk-border);background:white;margin:.7rem 0 1rem}
+.rk-kpi {padding:1rem;border-right:1px solid var(--rk-border);min-width:0}
+.rk-kpi:last-child {border-right:0}
+.rk-kpi-value {font-size:1.4rem;font-weight:500;margin-top:.4rem;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.rk-note {font-size:.8rem;color:var(--rk-muted);line-height:1.5;margin-top:.3rem}
+.rk-savings {padding:0 1.2rem 1.1rem;font-size:.88rem}
+.rk-impact {padding:.1rem .4rem;border-radius:3px;font-size:1rem;font-weight:550}
+.rk-impact.low {color:var(--rk-low);background:var(--rk-low-bg)}
+.rk-impact.mid {color:var(--rk-mid);background:var(--rk-mid-bg)}
+.rk-impact.high {color:var(--rk-high);background:var(--rk-high-bg)}
+.rk-impact.small {font-size:.8rem}
+.rk-verdict {margin:0 1.2rem 1rem;padding:.7rem;font-size:.85rem;background:var(--rk-surface-2)}
+.rk-section {font-size:1.05rem;font-weight:550;margin:1.1rem 0 .4rem}
+.atlas-probability-row {margin-bottom:.9rem}
+.atlas-probability-row>div:first-child {display:flex;align-items:baseline;gap:.5rem;font-size:.86rem;margin-bottom:.3rem}
+.atlas-probability-row strong {margin-left:auto;font-weight:500}
+.atlas-probability-row small {font-size:.76rem;color:var(--rk-muted)}
+.atlas-probability-track {height:6px;background:#e8ecef;border-radius:2px;overflow:hidden}
+.atlas-probability-track i {display:block;height:100%}
+.atlas-cost-row {padding:.8rem 0;border-bottom:1px solid var(--rk-border)}
+.atlas-cost-row>div:first-child {display:flex;justify-content:space-between;gap:.7rem;font-size:.85rem;margin-bottom:.4rem}
+.atlas-cost-row strong {font-weight:500;font-variant-numeric:tabular-nums;white-space:nowrap}
+.atlas-cost-track {height:7px;display:flex;overflow:hidden;border-radius:2px}
+.atlas-cost-track i {display:block;height:100%}
+.rk-empty {padding:1.8rem;background:white;border:1px solid var(--rk-border);border-radius:6px}
+.rk-empty h4 {font-size:1.15rem;font-weight:500;padding:0;margin:0 0 .5rem}
+.rk-empty p {font-size:.9rem;color:var(--rk-muted);margin:0}
+@media(max-width:800px) {
+ [data-testid="stMainBlockContainer"] {padding:3.5rem 1rem 1.5rem}
+ .company-asset-detail {grid-template-columns:1fr}
+ .atlas-page-header h1 {font-size:1.55rem}
+ .rk-kpis {grid-template-columns:1fr 1fr}
+ .rk-kpi {border-bottom:1px solid var(--rk-border)}
+}
+@media(prefers-reduced-motion:reduce) {*,*::before,*::after {animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+[data-testid="stHeading"] h3 {font-size:1.15rem!important;font-weight:550!important;line-height:1.35!important}

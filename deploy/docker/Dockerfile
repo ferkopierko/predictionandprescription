@@ -13,10 +13,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # vcdb_model.py je potrebný na načítanie uloženého modelu
-COPY app.py api.py frontend.py firma.py firma_ui.py simulacia.py opatrenia.py preklady.py vcdb_model.py ./
+COPY hrontech ./hrontech
+COPY scripts ./scripts
 COPY .streamlit ./.streamlit
-COPY static ./static
-COPY figures ./figures
+COPY analysis/figures ./analysis/figures
 
 RUN mkdir runtime && chown app:app runtime
 
@@ -27,4 +27,4 @@ EXPOSE 8501 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=4)"]
 
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]
+CMD ["python", "-m", "streamlit", "run", "hrontech/ui/app.py", "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true", "--browser.gatherUsageStats=false"]

@@ -13,21 +13,21 @@ enableStaticServing = true
 
 [theme]
 base = "light"
-primaryColor = "#087F8C"
-backgroundColor = "#F5F8FA"
-secondaryBackgroundColor = "#EDF3F6"
-textColor = "#193344"
+primaryColor = "#35586F"
+backgroundColor = "#F6F7F8"
+secondaryBackgroundColor = "#F3F5F6"
+textColor = "#252C32"
 borderColor = "#D9E4E9"
-dataframeHeaderBackgroundColor = "#EDF3F6"
-linkColor = "#087F8C"
+dataframeHeaderBackgroundColor = "#F3F5F6"
+linkColor = "#35586F"
 font = "IBM Plex Sans, Segoe UI, Helvetica, Arial, sans-serif"
 codeFont = "IBM Plex Mono, Menlo, Consolas, monospace"
 baseFontSize = 15
-baseRadius = "8px"
+baseRadius = "5px"
 buttonRadius = "8px"
 headingFontWeights = [700, 650, 600, 600, 600, 600]
 showWidgetBorder = true
-chartCategoricalColors = ["#087F8C", "#6A6C98", "#29546D", "#8A9EAA", "#287A62", "#B87926", "#BE514A"]
+chartCategoricalColors = ["#35586F", "#6A6C98", "#29546D", "#8A9EAA", "#287A62", "#B87926", "#BE514A"]
 
 # Lokálne písma IBM Plex (licencia SIL OFL, static/fonts/OFL.txt)
 
