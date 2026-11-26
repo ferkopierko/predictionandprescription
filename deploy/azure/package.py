@@ -1,6 +1,9 @@
 """Vytvorí ZIP pre App Service bez lokálnej databázy a vývojového prostredia."""
 
 from pathlib import Path
+import json
+import os
+import subprocess
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -20,4 +23,8 @@ with ZipFile(OUTPUT, "w", ZIP_DEFLATED) as archive:
     for path in files:
         archive.write(path, path.relative_to(ROOT).as_posix())
     archive.write(ROOT / "deploy/azure/requirements.txt", "requirements.txt")
+    revision = os.environ.get("GITHUB_SHA") or subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    archive.writestr("deployment.json", json.dumps({"revision": revision}))
 print(f"{OUTPUT}: {OUTPUT.stat().st_size:,} bytes")

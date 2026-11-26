@@ -1,4 +1,14 @@
-# Threat Modeling and Risk Assessment
+# safetyfirst · HronTech Strojárne
+
+Webová aplikácia pre simulovanú výrobnú firmu HronTech: inventár aktív, modelové bezpečnostné zistenia, simulácia incidentov, predikcia dopadu a odporúčanie opatrení.
+
+**[Otvoriť web](https://safetyfirst-hrontech-54c15147.azurewebsites.net/)** · **[REST API](https://safetyfirst-hrontech-54c15147.azurewebsites.net/docs)** · **[Stav automatického nasadenia](https://github.com/ferkopierko/predictionandprescription/actions/workflows/deploy-hrontech.yml)**
+
+## Aktualizácia webu z Gitu
+
+Každý push do vetvy `main` spustí GitHub Actions: prípravu dát a modelu, testy, vytvorenie balíka a nasadenie na Azure. Zmeny sa prejavia po úspešnom dokončení workflow, spravidla v priebehu niekoľkých minút. Prvý beh alebo zmena tréningových notebookov trvá dlhšie; nezmenené výstupy modelu sa používajú z cache.
+
+Azure SQL databáza je samostatná a pri nasadení sa neprepisuje. Hodnotenia, inventár a nastavenia uložené návštevníkmi zostávajú zachované. Lokálny beh používa SQLite. Podrobnosti a manuálne nasadenie sú v [deploy/azure/README.md](deploy/azure/README.md).
 
 Podrobný opis riešenia je v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
 

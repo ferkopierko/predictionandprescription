@@ -23,6 +23,16 @@ F1 má 60 CPU minút denne a uspávanie po nečinnosti. Nejde o limit jednej hod
 
 ## Nasadenie
 
+Hlavný spôsob aktualizácie je push do `main`. Workflow `.github/workflows/deploy-hrontech.yml` vytvorí balík, spustí testy a nasadí ho na tento web. Dá sa spustiť aj ručne cez GitHub → Actions → Deploy HronTech to Azure → Run workflow.
+
+GitHub sa prihlasuje cez OIDC a user-assigned identitu `hrontech-github-deploy`. Dôvera platí len pre `repo:ferkopierko/predictionandprescription:ref:refs/heads/main`. Identita má rolu Website Contributor iba na HronTech App Service. Nevyžaduje heslo, publish-profile secret ani oprávnenia k SQL databáze.
+
+Čistý runner vytvorí dáta a model z pripnutého VCDB zdroja; päť výstupov sa následne ukladá do cache viazanej na obsah notebookov, prípravných modulov a závislostí. Lokálna SQLite databáza sa do balíka nedostane. Nasadenie nevykonáva migráciu ani reinicializáciu používateľských dát. Endpoint `/health` obsahuje Git revision nasadeného balíka; workflow overí, že web už obsluhuje práve nasadený commit, aj funkčnosť firemného API.
+
+Stav: https://github.com/ferkopierko/predictionandprescription/actions/workflows/deploy-hrontech.yml
+
+Pôvodná verzia `579ccb7`, história, rozpracovaná pracovná kópia a konzistentná lokálna databáza boli pred nahradením zálohované na PC do `C:\Users\samoo\Documents\PaPU\zalohy\pred-hrontech-2026-11-26-210802`.
+
 `azure_app.py` spojí pôvodné REST API a Streamlit cez `st.App` do jedného procesu. `startup.sh` spúšťa jeden Uvicorn worker na porte 8000; viac workerov by rozdeľovalo Streamlit relácie v pamäti. Úpravy v `opatrenia.py` a `firma.py` pridávajú podporu Azure SQL pri zachovaní lokálneho SQLite režimu.
 
 Z koreňa tejto pracovnej kópie s pripravenými piatimi súbormi `data/processed/`:

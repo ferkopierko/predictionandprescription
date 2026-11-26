@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory() as directory:
     print("SQLite: zapis, citanie, mazanie OK")
     op.DB_PATH = path
     with TestClient(app) as client:
-        for url in ["/", "/_stcore/health", "/api/moznosti", "/api/register", "/api/hodnotenia", "/api/firma", "/api/firma/aktiva", "/api/firma/zranitelnosti", "/api/firma/incidenty", "/api/firma/scenare", "/docs"]:
+        for url in ["/", "/health", "/_stcore/health", "/api/moznosti", "/api/register", "/api/hodnotenia", "/api/firma", "/api/firma/aktiva", "/api/firma/zranitelnosti", "/api/firma/incidenty", "/api/firma/scenare", "/docs"]:
             response = client.get(url)
             assert response.status_code == 200, (url, response.status_code, response.text[:100])
             print(url, response.status_code)
