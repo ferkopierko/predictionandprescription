@@ -20,6 +20,7 @@ jobs:
       MPLBACKEND: Agg
       OMP_NUM_THREADS: "1"
       OPENBLAS_NUM_THREADS: "1"
+      PAPU_PACKAGE_PATH: ${{ runner.temp }}/hrontech-azure.zip
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -49,7 +50,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hrontech-${{ github.sha }}
-          path: ../hrontech-azure.zip
+          path: ${{ runner.temp }}/hrontech-azure.zip
           if-no-files-found: error
           retention-days: 7
 

@@ -7,7 +7,7 @@ import subprocess
 from zipfile import ZIP_DEFLATED, ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = ROOT.parent / "hrontech-azure.zip"
+OUTPUT = Path(os.environ.get("PAPU_PACKAGE_PATH", ROOT.parent / "hrontech-azure.zip"))
 REQUIRED_DATA = [
     "vcdb_clean.csv", "vcdb_predikcie.csv", "vcdb_opatrenia_cis.csv",
     "vcdb_register_rizik.csv", "model_dopad_vcdb.joblib",
