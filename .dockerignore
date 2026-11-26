@@ -1,6 +1,10 @@
 *
 !app.py
 !api.py
+!frontend.py
+!firma.py
+!firma_ui.py
+!simulacia.py
 !opatrenia.py
 !preklady.py
 !.streamlit/config.toml

@@ -13,7 +13,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # vcdb_model.py je potrebný na načítanie uloženého modelu
-COPY app.py api.py opatrenia.py preklady.py simulacia.py vcdb_model.py ./
+COPY app.py api.py frontend.py firma.py firma_ui.py simulacia.py opatrenia.py preklady.py vcdb_model.py ./
 COPY .streamlit ./.streamlit
 COPY static ./static
 COPY figures ./figures

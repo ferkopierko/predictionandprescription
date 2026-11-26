@@ -1,13 +1,7 @@
-"""Simulácia sledovania siete: generátor posiela testovacie incidenty z VCDB na REST API.
+"""Generate fictional HronTech incidents through the company REST API.
 
-Každých pár sekúnd vyberie náhodný incident z testovacej časti dát (rovnaký ako tlačidlo
-Náhodný testovací incident v aplikácii) a pošle ho na POST /api/hodnotenie. API ho vyhodnotí
-a uloží do databázy, odkiaľ ho záložka Živé sledovanie v aplikácii hneď zobrazí.
-
-Spustenie (API musí bežať):
-    python simulacia.py                      # každé 3 s, kým ho nezastavíte (Ctrl+C)
-    python simulacia.py --interval 1 --pocet 50
-    python simulacia.py --api http://127.0.0.1:8000 --seed 67
+python simulacia.py --pocet 10 --interval 3 --seed 67
+No network traffic is scanned or attacked. No ground-truth impact is invented.
 """
 
 import argparse
@@ -20,101 +14,87 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 
-import opatrenia as op
-
-# Volania na localhost nesmú ísť cez systémovú proxy
 OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Posiela testovacie incidenty z VCDB na REST API ako simuláciu sledovania siete.")
-    # 127.0.0.1 namiesto localhost: na Windowse sa localhost najprv skúša cez IPv6 a každé volanie by trvalo ~2 s
-    parser.add_argument("--api", default=os.environ.get("SIMULACIA_API", "http://127.0.0.1:8000"),
-                        help="adresa API (predvolene http://127.0.0.1:8000 alebo premenná SIMULACIA_API)")
-    parser.add_argument("--interval", type=float, default=3.0, help="priemerný počet sekúnd medzi incidentmi (predvolene 3)")
-    parser.add_argument("--rozptyl", type=float, default=0.5,
-                        help="náhodná odchýlka intervalu ako podiel z neho, 0 = presne pravidelne (predvolene 0,5)")
-    parser.add_argument("--pocet", type=int, default=0, help="koľko incidentov poslať, 0 = bez obmedzenia (predvolene 0)")
-    parser.add_argument("--seed", type=int, default=None, help="seed pre opakovateľné poradie incidentov")
+    parser = argparse.ArgumentParser(description="Generátor simulovaných incidentov výrobnej firmy HronTech.")
+    parser.add_argument("--api", default=os.environ.get("SIMULACIA_API", "http://127.0.0.1:8000"))
+    parser.add_argument("--interval", type=float, default=3.0, help="Priemerný interval v sekundách.")
+    parser.add_argument("--rozptyl", type=float, default=.5, help="Relatívna odchýlka intervalu, od 0 do menej ako 1.")
+    parser.add_argument("--pocet", type=int, default=0, help="Počet incidentov, 0 znamená do zastavenia Ctrl+C.")
+    parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
     if args.interval <= 0 or not 0 <= args.rozptyl < 1 or args.pocet < 0:
-        parser.error("interval musí byť kladný, rozptyl v intervale <0, 1) a počet nezáporný")
+        parser.error("Interval musí byť kladný, rozptyl v <0,1) a počet nezáporný.")
     return args
 
 
 def call(method, url, body=None, timeout=30):
     data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method=method,
-                                     headers={"Content-Type": "application/json; charset=utf-8"})
+    request = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json; charset=utf-8"})
     with OPENER.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
 def wait_for_api(api, attempts=30):
-    """Počká, kým API odpovedá, aby sa generátor dal spustiť naraz s ním."""
     for attempt in range(attempts):
         try:
-            call("GET", f"{api}/api/moznosti", timeout=5)
+            call("GET", f"{api}/api/firma", timeout=5)
             return
         except (urllib.error.URLError, OSError) as error:
             if attempt == 0:
-                print(f"Čakám na API {api} … ({error})", flush=True)
+                print(f"Čakám na firemné API {api}: {error}", flush=True)
             time.sleep(2)
-    sys.exit(f"API {api} neodpovedá. Spustite ho príkazom: uvicorn api:app --port 8000")
+    raise RuntimeError("Firemné API neodpovedá. Spustite uvicorn api:app --port 8000.")
 
 
-def incident_body(sample):
-    """Telo požiadavky POST /api/hodnotenie z testovacieho incidentu."""
-    return {
-        **sample["vstup"],
-        "nazov": f"VCDB #{sample['zaznam_id']}",
-        "zdroj": "simulácia",
-        "skutocny_dopad": sample["skutocny_dopad"],
-    }
-
-
-def euro(value):
-    return f"{value:,.0f}".replace(",", " ") + " €"
+def incident_body(case):
+    return {**case["input"], "asset_id": case["asset_id"], "finding_id": case["finding_id"],
+            "case_id": case["id"], "frekvencia": case["frequency"], "nazov": case["title"], "zdroj": "simulácia"}
 
 
 def main():
-    # Výpis do súboru alebo do konzoly s inou znakovou sadou nesmie spadnúť na znakoch ✓ a ✗
-    if sys.stdout.isatty():
-        sys.stdout.reconfigure(errors="replace")
-    else:
-        sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     args = parse_args()
-    api = args.api.rstrip("/")
-    wait_for_api(api)
-    rng = random.Random(args.seed)
-    print(f"Simulácia beží: incident každých ~{args.interval:g} s na {api}/api/hodnotenie. Zastavenie: Ctrl+C", flush=True)
-
-    sent = hits = 0
+    api, rng = args.api.rstrip("/"), random.Random(args.seed)
+    try:
+        wait_for_api(api)
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    sent = failures = 0
+    print(f"Simulácia HronTech: interval ~{args.interval:g} s. Zastavenie Ctrl+C.", flush=True)
     try:
         while not args.pocet or sent < args.pocet:
-            sample = op.random_test_incident(rng.randrange(2**32))
             try:
-                result = call("POST", f"{api}/api/hodnotenie", incident_body(sample))
-            except urllib.error.HTTPError as error:
-                print(f"Incident VCDB #{sample['zaznam_id']} odmietnutý ({error.code}): {error.read().decode('utf-8', 'replace')}",
-                      flush=True)
-            except (urllib.error.URLError, OSError) as error:
-                print(f"API neodpovedá ({error}), skúsim znova.", flush=True)
-            else:
+                findings = call("GET", f"{api}/api/firma/zranitelnosti")
+                active = [finding for finding in findings if finding["status"] != "Odstránená"]
+                if not active:
+                    print("Žiadne otvorené zistenia pre simuláciu. Generátor sa zastavuje.", flush=True)
+                    break
+                finding = rng.choice(active)
+                case = call("POST", f"{api}/api/firma/simulacia", {"scenario": finding["scenario"], "finding_id": finding["id"]})
+                result = call("POST", f"{api}/api/hodnotenie", incident_body(case))
                 sent += 1
-                hit = result["predikovany_dopad"] == sample["skutocny_dopad"]
-                hits += hit
-                print(f"{datetime.now():%H:%M:%S}  #{result['id']:<5} {result['odvetvie'][:22]:<22} "
-                      f"{result['vzor_utoku'][:26]:<26} dopad {result['predikovany_dopad']:<7} "
-                      f"(skutočný {sample['skutocny_dopad']:<7} {'✓' if hit else '✗'})  "
-                      f"strata {euro(result['ocakavana_strata']):>11}/rok  → {result['opatrenie']}", flush=True)
+                failures = 0
+                print(f"{datetime.now():%H:%M:%S} #{result['id']} | {result['asset_name']} | "
+                      f"{result['predikovany_dopad']} | {result['ocakavana_strata']:,.0f} EUR/rok | {result['opatrenie']}", flush=True)
+            except (urllib.error.URLError, OSError, KeyError, ValueError) as error:
+                failures += 1
+                detail = error.read().decode("utf-8", "replace") if isinstance(error, urllib.error.HTTPError) else str(error)
+                print(f"Požiadavka zlyhala: {detail}", file=sys.stderr, flush=True)
+                if failures >= 3:
+                    print("Tri po sebe idúce chyby. Generátor sa zastavuje.", file=sys.stderr)
+                    return 1
             if not args.pocet or sent < args.pocet:
                 time.sleep(args.interval * rng.uniform(1 - args.rozptyl, 1 + args.rozptyl))
     except KeyboardInterrupt:
         pass
-    if sent:
-        print(f"\nOdoslané incidenty: {sent}, predikovaný dopad sa zhodol so skutočným v {hits / sent:.0%} prípadov.")
+    print(f"Odoslané a uložené incidenty: {sent}. Dopad je predikovaný; skutočný rozsah pri simulácii nepoznáme.", flush=True)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

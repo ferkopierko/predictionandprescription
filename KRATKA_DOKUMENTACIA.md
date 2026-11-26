@@ -42,54 +42,44 @@ Pri obmedzenom rozpočte sa opatrenia zoradia podľa čistého prínosu na euro.
 
 ## Aplikácia a integrácia
 
-| Súčasť | Súbor | Úloha |
-| --- | --- | --- |
-| Frontend | [app.py](app.py) | Streamlit, <http://localhost:8501> |
-| REST API | [api.py](api.py) | FastAPI, <http://localhost:8000/docs> |
-| Logika | [opatrenia.py](opatrenia.py) | predikcia, výber opatrenia, databáza |
-| Simulácia | [simulacia.py](simulacia.py) | generátor incidentov pre živé sledovanie |
-| Databáza | SQLite, tabuľka `hodnotenia` | spoločná pre aplikáciu aj API |
+IS safetyfirst je prispôsobený simulovanej výrobnej firme **HronTech Strojárne, s. r. o.** (82 zamestnancov, Banská Bystrica). Obsahuje 15 skupín aktív a 14 počiatočných modelových zraniteľností. Údaje firmy sú fiktívne; historický tréningový dataset VCDB zostáva reálny.
 
-Záložky aplikácie: **Nové hodnotenie** (formulár incidentu), **Uložené hodnotenia**, **Prehľad** (grafy, obnovujú sa každých 5 s), **Živé sledovanie**, **Register rizík** a **Predpoklady**.
+- **Firma:** inventár, weby, zraniteľnosti a nastavenie ekonomických predpokladov.
+- **Simulácia:** sedem rodín incidentov, väzba na otvorené zistenie a konkrétne aktívum.
+- **Nové hodnotenie:** firemné aktívum → okolnosti incidentu → model dopadu a výber ochrany.
+- **Uložené hodnotenia a Prehľad:** história iba tejto firmy.
+- **Živé sledovanie:** automaticky obnovované hodnotenia od generátora alebo všetky firemné záznamy.
+- **Register rizík:** firemné scenáre a poradie opatrení v rozpočte.
+- **Predpoklady:** vysvetlenie modelu a nastavených cien, účinnosti a strát.
 
-## Simulácia sledovania siete
+Frontend a REST API používajú `firma.py`, ktorý zdieľa model z `opatrenia.py`. SQLite obsahuje inventár, zraniteľnosti, incidenty, hodnotenia, ich väzby, ekonomické predpoklady a denník zmien. Z výsledku sa dá otvoriť súvisiaca zraniteľnosť a zapísať stav jej riešenia.
 
-Namiesto ručného vypĺňania formulára simuluje sledovanie siete generátor [simulacia.py](simulacia.py):
+Predvolené firemné predpoklady sú 45 000 € ročný rozpočet, straty 5 000 / 50 000 / 500 000 € podľa tried dopadu, ceny ochrany na úrovni 35 % základného modelu a trojročný horizont. Dajú sa meniť. Výsledky notebookov vyššie sú základný experiment a používajú iné finančné predpoklady.
 
+## Simulácia sledovania
+
+`simulacia.py` pravidelne vytvorí firemný incident cez `/api/firma/simulacia` a vyhodnotí ho cez `/api/hodnotenie`. Posiela povinné ID aktíva, zraniteľnosti a incidentu, nastavenú frekvenciu a zdroj `simulácia`. Všetky udalosti patria HronTech. Skutočný dopad pri týchto scenároch nepoznáme, preto sa nevykazuje vymyslená úspešnosť predikcie.
+
+```text
+Generátor → firemný incident → API → model + firemné predpoklady → SQLite → živé sledovanie
 ```
-simulacia.py ──POST /api/hodnotenie──► api.py ──► opatrenia.py (model + opatrenie) ──► SQLite
-                                                                                         │
-                                      app.py, záložka Živé sledovanie (obnova každé 2 s) ◄┘
-```
 
-1. Generátor každých ~3 s (s náhodnou odchýlkou) vyberie incident z **testovacej časti VCDB**, ktorú model pri tréningu nevidel.
-2. Pošle ho na `POST /api/hodnotenie` s poľom `zdroj: "simulácia"` a so skutočným dopadom z dát (`skutocny_dopad`). Model skutočný dopad nepoužíva, slúži iba na porovnanie.
-3. API incident vyhodnotí a uloží. Generátor vypíše riadok s predikovaným a skutočným dopadom, očakávanou stratou a opatrením.
-4. Záložka **Živé sledovanie** ukazuje, či generátor beží, ukazovatele (počet incidentov, vysoký dopad, zhoda so skutočným dopadom, očakávaná strata), tabuľku posledných incidentov so zvýraznením nových a grafy straty v čase a vzorov útokov. Dá sa prepnúť na všetky zdroje a simulované hodnotenia vymazať.
-
-Parametre generátora: `--interval` (sekundy medzi incidentmi), `--rozptyl` (náhodná odchýlka), `--pocet` (0 = bez obmedzenia), `--seed` (opakovateľné poradie), `--api` (adresa API).
+Generátor nemonitoruje ani nenapáda reálnu sieť. Živé sledovanie sa obnovuje každé dve sekundy. Model odhaduje rozsah úniku dát; nepredikuje fyzickú poruchu CNC, dobu odstávky ani pravdepodobnosť zneužitia zraniteľnosti.
 
 ## Spustenie
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-jupyter nbconvert --to notebook --execute --inplace priprava_dat.ipynb
-jupyter nbconvert --to notebook --execute --inplace predikcia.ipynb
-jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
+Príprava prostredia a notebookov je opísaná v README. Po vygenerovaní dát a modelu:
 
-# tri okná terminálu
-streamlit run app.py --server.address localhost
-uvicorn api:app --port 8000
-python simulacia.py
+```powershell
+streamlit run app.py
+uvicorn api:app --host 127.0.0.1 --port 8000
+python simulacia.py --pocet 10 --interval 3 --seed 67
 ```
 
-S Dockerom: `docker compose --profile simulacia up -d --build` spustí aplikáciu, API aj generátor. Bez `--profile simulacia` sa generátor nespustí.
+S Dockerom: `docker compose --profile simulacia up -d --build`. Bez profilu sa spustí iba web a API. Adresy sú <http://localhost:8501> a <http://localhost:8000/docs>. Dáta SQLite sa zachovajú po reštarte.
 
-## Obmedzenia
+## Overenie a obmedzenia
 
-- VCDB obsahuje iba verejne známe incidenty a 73 % obetí je z USA.
-- Dopad je meraný počtom uniknutých záznamov, nie peniazmi. Straty, ceny a účinnosť opatrení sú predpoklady.
-- Približne 4 z 10 predikcií vysokého dopadu sú zbytočný poplach (precision 0,59).
-- Simulácia posiela už známe incidenty z VCDB, nie skutočnú sieťovú prevádzku. Ukazuje, ako by sa modul napojil na systém sledovania (SIEM), ktorý by incidenty posielal na API.
+`python -m unittest discover -s tests -v` testuje integritu firemných väzieb, ekonomiku, uložené predpoklady, históriu, opravy aj kompatibilitu generátora a API. `python opatrenia.py` porovná prípravu znakov s notebookom.
+
+Ceny, frekvencie a účinnosť opatrení sú modelové predpoklady. Počty zariadení sú evidencia a samy nemenia predikciu. Jednorazový odhad opravy je oddelený od ročných cien CIS. Stav „Odstránená“ nie je technické overenie opravy. Spoločné opatrenia medzi scenármi sa cenovo nezlučujú a opakované udalosti sa nesmú sčítať ako nezávislé ročné riziká celej firmy.

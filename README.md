@@ -1,6 +1,6 @@
 # Threat Modeling and Risk Assessment
 
-Stručný prehľad je v [KRATKA_DOKUMENTACIA.md](KRATKA_DOKUMENTACIA.md), podrobný opis riešenia v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
+Podrobný opis riešenia je v [DOKUMENTACIA.md](DOKUMENTACIA.md) a vysvetlenie, ako jednotlivé časti fungujú, v [VYSVETLENIE.md](VYSVETLENIE.md).
 
 ## Dataset
 
@@ -60,65 +60,92 @@ jupyter nbconvert --to notebook --execute --inplace preskriptivna_udrzba.ipynb
 
 Notebooky treba spúšťať v tomto poradí, lebo každý používa výstupy predchádzajúceho. Pri spustení sa prekreslia aj grafy vo `figures/`, príkaz `git restore figures/` ich vráti do verzie z gitu.
 
-## Aplikácia
+## Aplikácia safetyfirst: HronTech Strojárne
 
-Aplikácia hodnotí jednotlivé incidenty modelom VCDB z `data/processed/model_dopad_vcdb.joblib`. Pred spustením musia existovať výstupy notebookov v `data/processed/` (stačí spustiť `priprava_dat.ipynb`, `predikcia.ipynb` a `preskriptivna_udrzba.ipynb`).
+Funkčný IS je prispôsobený jednej **fiktívnej výrobnej firme HronTech Strojárne, s. r. o.** v Banskej Bystrici. Má 82 zamestnancov, 15 skupín aktív (kancelárske a CAD počítače, výrobné terminály a CNC riadenie, ERP, databázu, doménové radiče, súborový server, zálohy, VPN, web a zákaznícky portál) a 14 počiatočných modelových zraniteľností.
+
+Firma, inventár, zraniteľnosti a incidenty sú simulované. Adresy `*.example` nie sú reálne ciele a aplikácia nič neskenuje. Predikčný model používa skutočné historické dáta VCDB. Nehodnotí CVSS ani pravdepodobnosť zneužitia zraniteľnosti; odhaduje rozsah prípadného úniku dát.
+
+Pred spustením musia existovať výstupy notebookov v `data/processed/`. Stačí spustiť `priprava_dat.ipynb`, `predikcia.ipynb` a `preskriptivna_udrzba.ipynb`.
 
 ```powershell
 docker compose up -d --build
 ```
 
-| Služba | Adresa | Obsah |
-| --- | --- | --- |
-| `app` | <http://localhost:8501> | Webová aplikácia Streamlit |
-| `api` | <http://localhost:8000/docs> | REST API (FastAPI) s interaktívnou dokumentáciou |
+| Služba | Adresa |
+| --- | --- |
+| Streamlit | <http://localhost:8501> |
+| REST API a jeho dokumentácia | <http://localhost:8000/docs> |
 
-Obe služby používajú rovnaký modul `opatrenia.py` a rovnakú databázu SQLite (tabuľka `hodnotenia`) vo volume Dockeru. Príkaz `docker compose down` ich zastaví.
+Bez Dockera, v dvoch termináloch s aktivovaným prostredím:
 
-Bez Dockera:
-
-```bash
+```powershell
 streamlit run app.py
-uvicorn api:app --port 8000
+uvicorn api:app --host 127.0.0.1 --port 8000
 ```
 
-Databáza je vtedy v `data/processed/hodnotenia.db`, iné umiestnenie sa dá nastaviť premennou `HODNOTENIA_DB`.
+Databáza SQLite je v `data/processed/hodnotenia.db`; cestu mení `HODNOTENIA_DB`. Firemné tabuľky sa pri prvom spustení naplnia iba raz, zmeny potom pretrvajú reštart. Staršie všeobecné hodnotenia sa nemažú, ale v histórii firmy sa zobrazujú iba firemné záznamy.
 
-**Záložky aplikácie**
+### Použitie
 
-- **Nové hodnotenie:** formulár incidentu (odvetvie, veľkosť, krajina, cielenosť, typ aktéra a útoku, podrobné hodnoty, narušená integrita a dostupnosť). Ponúka iba hodnoty, ktoré sa v dátach vyskytujú aspoň 5-krát. Výsledkom sú pravdepodobnosti dopadu, očakávaná ročná strata a odporúčané opatrenie s opatreniami CIS. Tlačidlo **Náhodný testovací incident** vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad.
-- **Uložené hodnotenia:** záznamy z databázy zoradené podľa očakávanej straty, s možnosťou vymazania.
-- **Prehľad:** interaktívne grafy z uložených hodnotení: počet hodnotení v čase podľa dopadu, kumulatívna očakávaná strata, odporúčané opatrenia a najčastejšie vzory útokov. Obnovujú sa každých 5 sekúnd, takže zahŕňajú aj hodnotenia z API.
-- **Živé sledovanie:** incidenty, ktoré posiela generátor `simulacia.py` cez API, zobrazené naživo (obnova každé 2 s): stav generátora, ukazovatele, tabuľka posledných incidentov a grafy. Popis je nižšie v časti Simulácia sledovania siete.
-- **Register rizík:** 48 scenárov z notebooku, interaktívna mapa rizík, krivka rozpočtu s posuvníkom ročného rozpočtu a porovnanie stratégií. Grafy sa počítajú z dát rovnako ako grafy 7 až 9 v notebooku.
-- **Predpoklady:** straty, ceny a účinnosť opatrení a prahy, od ktorých sa opatrenie oplatí.
+1. **Firma:** inventár aktív a webov, detaily, súvisiace zraniteľnosti a ich evidencia. Možno pridávať aktíva a zistenia a meniť stav riešenia.
+2. **Simulácia:** sedem pripravených scenárov. Spustenie založí incident a predvyplní konkrétne aktívum, súvisiacu zraniteľnosť a okolnosti incidentu.
+3. **Nové hodnotenie:** výber firemného aktíva, údaje o incidente a frekvencia. Odvetvie výroby, veľkosť a krajina sa dopĺňajú z profilu. Výsledok obsahuje pravdepodobnosti dopadu, porovnanie opatrení, konkrétnu opravu prepojenej zraniteľnosti a informáciu, či odporúčanie pokrýva rozpočet.
+4. **Uložené hodnotenia a Prehľad:** história firmy, export, filtre a grafy. Každé hodnotenie je previazané s aktívom a prípadne s incidentom a zraniteľnosťou.
+5. **Register rizík:** aktuálne firemné scenáre a výber ekonomicky prínosných opatrení v rozpočte. Rodina incidentov sa počíta iba raz, nie raz za každé zistenie.
+6. **Predpoklady:** vysvetlenie modelu a ekonomiky. Nastavenia sa menia cez Firma → Nastavenie firmy.
 
-**Simulácia sledovania siete**
+Predvolený ročný rozpočet je 45 000 €, finančné straty podľa dopadu 5 000 / 50 000 / 500 000 €, koeficient cien ochrany 0,35 a horizont tri roky. Tieto hodnoty sa reálne používajú vo výpočte a ich kópia sa ukladá k hodnoteniu. Modelové účinnosti opatrení zostávajú 40 % pre prevenciu a 35 % pre detekciu a reakciu.
 
-Generátor [simulacia.py](simulacia.py) každých ~3 sekundy pošle náhodný testovací incident z VCDB na `POST /api/hodnotenie` so zdrojom `simulácia` a skutočným dopadom z dát. API ho vyhodnotí a uloží a záložka **Živé sledovanie** ho hneď zobrazí. API musí bežať.
+Jednorazová cena opravy zraniteľnosti je oddelený evidenčný odhad, nie ročná cena balíka CIS. Zmena stavu zraniteľnosti eviduje rozhodnutie analytika; nedokazuje vykonanú technickú opravu ani automatické zníženie frekvencie. Pri plánovaní sa môžu prekrývať spoločné CIS opatrenia; ich ceny sa medzi scenármi nezlučujú. Model nepredikuje fyzické poruchy CNC ani trvanie odstávky.
 
-```powershell
-python simulacia.py                          # kým ho nezastavíte (Ctrl+C)
-python simulacia.py --interval 1 --pocet 50  # 50 incidentov, jeden za sekundu
-python simulacia.py --seed 67                # opakovateľné poradie incidentov
-```
+### REST API
 
-V Dockeri sa generátor spustí spolu s ostatnými službami príkazom `docker compose --profile simulacia up -d --build`.
-
-**REST API**
-
-| Metóda | Cesta | Popis |
+| Metóda | Cesta | Obsah |
 | --- | --- | --- |
-| GET | `/api/moznosti` | povolené hodnoty polí incidentu |
-| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy (nepovinné polia `zdroj` a `skutocny_dopad` používa simulácia) |
-| GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
-| GET | `/api/register` | register rizík z preskriptívnej analýzy |
+| GET | `/api/firma` | profil firmy |
+| GET | `/api/firma/aktiva` | inventár |
+| GET | `/api/firma/zranitelnosti` | evidencia zistení |
+| PATCH | `/api/firma/zranitelnosti/{id}` | stav a poznámka k riešeniu |
+| GET | `/api/firma/scenare` | pripravené scenáre |
+| POST | `/api/firma/simulacia` | vytvorenie simulovaného incidentu |
+| GET | `/api/firma/incidenty` | história simulácií |
+| GET | `/api/moznosti` | podporované vstupné hodnoty |
+| POST | `/api/hodnotenie` | hodnotenie viazané na povinné `asset_id` |
+| GET | `/api/hodnotenia` | iba hodnotenia HronTech |
+| GET | `/api/register` | firemné plánovacie scenáre |
 
-Príklad z PowerShellu (dá sa vyskúšať aj priamo na <http://localhost:8000/docs> cez *Try it out*):
+Príklad vytvorenia incidentu a následného vyhodnotenia:
 
 ```powershell
-$telo = @{ odvetvie = "Informácie"; aktor_typy = @("external"); akcia_typy = @("hacking"); akcia_vektory = @("hacking:Web application") } | ConvertTo-Json
-Invoke-RestMethod -Method Post http://localhost:8000/api/hodnotenie -ContentType "application/json; charset=utf-8" -Body ([Text.Encoding]::UTF8.GetBytes($telo))
+$case = Invoke-RestMethod -Method Post http://localhost:8000/api/firma/simulacia -ContentType 'application/json' -Body '{"scenario":"portal"}'
+$body = @{
+    asset_id = $case.asset_id
+    finding_id = $case.finding_id
+    case_id = $case.id
+    nazov = $case.title
+    frekvencia = $case.frequency
+}
+$case.input.psobject.Properties | ForEach-Object { $body[$_.Name] = $_.Value }
+$json = $body | ConvertTo-Json -Depth 8
+Invoke-RestMethod -Method Post http://localhost:8000/api/hodnotenie -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json))
 ```
 
-Príkaz `python opatrenia.py` overí, že vstup z formulára dáva pre testovacie incidenty rovnaké pravdepodobnosti ako predikcia nad pôvodným riadkom z `vcdb_clean.csv`.
+### Overenie
+
+```powershell
+python -m unittest discover -s tests -v
+python opatrenia.py
+```
+
+Testy firemnej vrstvy používajú dočasnú databázu: overujú väzby, uloženie incidentov, oddelenie histórie, ekonomické predpoklady, ich uložené kópie a evidenciu opráv. `python opatrenia.py` overuje zhodu prípravy znakov s pôvodným notebookom.
+
+### Živé sledovanie a generátor
+
+Funkcia z merge `579ccb7` je zachovaná a prispôsobená firme. Generátor posiela sedem typov firemných scenárov s povinnými väzbami na aktívum, zraniteľnosť a incident. Používa `zdroj: "simulácia"`; nevymýšľa skutočný dopad. Pole `skutocny_dopad` zostáva voliteľnou metainformáciou API a nevstupuje do modelu.
+
+```powershell
+python simulacia.py --pocet 10 --interval 3 --seed 67
+```
+
+Stránka **Živé sledovanie** sa obnovuje každé dve sekundy a ukazuje iba firemné hodnotenia. S Dockerom zostáva dostupný profil `docker compose --profile simulacia up -d --build`. Bez profilu sa generátor automaticky nespúšťa. Pôvodný generátor náhodných záznamov z rôznych organizácií bol nahradený firemnými scenármi; payload bez `asset_id` už nie je platný. Parametre `--api`, `--interval`, `--rozptyl`, `--pocet` a `--seed` zostávajú zachované.

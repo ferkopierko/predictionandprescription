@@ -320,19 +320,20 @@ def control_list(pattern, option):
     return ", ".join(f"CIS {number}" for number in numbers) or "monitorovanie"
 
 
-def residual_share():
+def residual_share(horizon=HORIZON_YEARS):
     """Časť straty, ktorá po zavedení opatrenia zostane, s ohľadom na čas zavedenia v horizonte."""
-    effective = (12 * HORIZON_YEARS - OPTIONS["mesiace zavedenia"].to_numpy()) / (12 * HORIZON_YEARS)
+    effective = (12 * horizon - OPTIONS["mesiace zavedenia"].to_numpy()) / (12 * horizon)
     return (1 - OPTIONS["menej incidentov"].to_numpy() * effective) * (1 - OPTIONS["menšia strata"].to_numpy() * effective)
 
 
-def expected_loss(distribution, frequency):
-    return INCIDENTS_PER_YEAR * frequency * float(np.asarray(distribution) @ LOSS.to_numpy())
+def expected_loss(distribution, frequency, loss=None):
+    losses = LOSS.to_numpy() if loss is None else np.asarray(loss, dtype=float)
+    return INCIDENTS_PER_YEAR * frequency * float(np.asarray(distribution) @ losses)
 
 
-def total_costs(distribution, frequency, costs):
+def total_costs(distribution, frequency, costs, loss=None, horizon=HORIZON_YEARS):
     """Ročné celkové náklady každého opatrenia: cena plus strata, ktorá zostane."""
-    return costs + expected_loss(distribution, frequency) * residual_share()
+    return costs + expected_loss(distribution, frequency, loss) * residual_share(horizon)
 
 
 def predict(incident):
@@ -340,7 +341,7 @@ def predict(incident):
     return calibrated_probabilities(context()["bundle"], to_frame(incident))[0]
 
 
-def assess(incident, frequency=None):
+def assess(incident, frequency=None, *, loss=None, cost_factor=1.0, horizon=HORIZON_YEARS):
     """Vyhodnotí jeden incident: dopad, riziko, opatrenie a porovnanie opatrení."""
     row = to_row(incident)
     pattern = row["vzor_utoku"]
@@ -348,8 +349,9 @@ def assess(incident, frequency=None):
     frequency = default if frequency is None else float(frequency)
     probabilities = predict(incident)
 
-    costs = option_costs(pattern)
-    totals = total_costs(probabilities, frequency, costs)
+    losses = LOSS.to_numpy() if loss is None else np.asarray(loss, dtype=float)
+    costs = option_costs(pattern) * cost_factor
+    totals = total_costs(probabilities, frequency, costs, losses, horizon)
     choice = int(totals.argmin())
     option = OPTION_NAMES[choice]
     comparison = [
@@ -370,8 +372,8 @@ def assess(incident, frequency=None):
         "frekvencia_predvolena": default,
         "pravdepodobnosti": dict(zip(LABELS, map(float, probabilities))),
         "predikovany_dopad": LABELS[int(probabilities.argmax())],
-        "strata_incidentu": float(probabilities @ LOSS.to_numpy()),
-        "ocakavana_strata": expected_loss(probabilities, frequency),
+        "strata_incidentu": float(probabilities @ losses),
+        "ocakavana_strata": expected_loss(probabilities, frequency, losses),
         "opatrenie": option,
         "opatrenia_cis": control_list(pattern, option),
         "cena_opatrenia": float(costs[choice]),
@@ -597,15 +599,30 @@ RECORD_COLUMNS = [
 ]
 
 
+def uses_azure_sql(path=None):
+    return path is None and bool(os.environ.get("AZURE_SQL_CONNECTION_STRING"))
+
+
+@lru_cache(maxsize=1)
+def azure_sql_driver():
+    import mssql_python
+
+    mssql_python.pooling(max_size=8, idle_timeout=30)
+    return mssql_python
+
+
 def connect(path=None):
+    if uses_azure_sql(path):
+        return azure_sql_driver().connect(os.environ["AZURE_SQL_CONNECTION_STRING"], timeout=60)
     path = Path(path or DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
+    connection.execute("PRAGMA foreign_keys=ON")
     connection.execute(SCHEMA)
     return connection
 
 
-def save_assessment(incident, result, source, name="", actual_impact=None, path=None):
+def save_assessment(incident, result, source, name="", actual_impact=None, path=None, connection=None):
     """Uloží hodnotenie do tabuľky hodnotenia a vráti jeho id."""
     probabilities = result["pravdepodobnosti"]
     values = {
@@ -629,17 +646,27 @@ def save_assessment(incident, result, source, name="", actual_impact=None, path=
         "cisty_prinos": result["cisty_prinos"],
         "vstup": json.dumps(incident, ensure_ascii=False, sort_keys=True),
     }
-    with closing(connect(path)) as connection, connection:
-        cursor = connection.execute(
-            f"INSERT INTO hodnotenia ({', '.join(values)}) VALUES ({', '.join('?' * len(values))})",
+    def insert(db):
+        output = " OUTPUT INSERTED.id" if uses_azure_sql(path) else ""
+        cursor = db.execute(
+            f"INSERT INTO hodnotenia ({', '.join(values)}){output} VALUES ({', '.join('?' * len(values))})",
             list(values.values()),
         )
-        return cursor.lastrowid
+        return int(cursor.fetchone()[0]) if uses_azure_sql(path) else cursor.lastrowid
+    if connection is not None:
+        return insert(connection)
+    with closing(connect(path)) as db, db:
+        return insert(db)
 
 
 def load_assessments(path=None):
     """Všetky uložené hodnotenia zoradené od najvyššej očakávanej straty."""
     with closing(connect(path)) as connection:
+        if uses_azure_sql(path):
+            cursor = connection.execute(
+                f"SELECT {', '.join(RECORD_COLUMNS)} FROM hodnotenia ORDER BY ocakavana_strata DESC, id DESC"
+            )
+            return pd.DataFrame.from_records([tuple(row) for row in cursor.fetchall()], columns=RECORD_COLUMNS)
         return pd.read_sql_query(
             f"SELECT {', '.join(RECORD_COLUMNS)} FROM hodnotenia ORDER BY ocakavana_strata DESC, id DESC",
             connection,

@@ -8,12 +8,13 @@ import math
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 import opatrenia as op
+import firma as co
 
 app = FastAPI(
-    title="Hodnotenie rizika bezpečnostných incidentov",
+    title="safetyfirst · HronTech Strojárne",
     description="Predikcia dopadu incidentu nad VCDB a výber opatrenia CIS Controls podľa rizika, nákladov a času.",
     version="1.0",
 )
@@ -22,9 +23,10 @@ app = FastAPI(
 class Incident(BaseModel):
     """Incident tak, ako ho analytik pozná hneď po odhalení. Povolené hodnoty vracia GET /api/moznosti."""
 
-    odvetvie: str = "Neznáme"
-    velkost_organizacie: str = "neznáma"
-    krajina: str = "Unknown"
+    model_config = ConfigDict(extra="forbid")
+    odvetvie: str = "Výroba"
+    velkost_organizacie: str = "malá"
+    krajina: str = "iná"
     cielenost: str = "neznáma"
     aktor_typy: list[str] = Field(default_factory=list, examples=[["external"]])
     akcia_typy: list[str] = Field(default_factory=list, examples=[["hacking"]])
@@ -40,16 +42,17 @@ class Incident(BaseModel):
 
 
 class Request(Incident):
+    asset_id: str = Field(description="ID aktíva z GET /api/firma/aktiva")
+    finding_id: str | None = None
+    case_id: int | None = Field(None, ge=1)
+    zdroj: Literal["API", "simulácia"] = "API"
+    skutocny_dopad: Literal["nízky", "stredný", "vysoký"] | None = Field(
+        None, description="Voliteľný skutočne zistený dopad. Firemný generátor ho nevymýšľa ani neposiela.",
+    )
     nazov: str = Field("", max_length=200, description="Nepovinný názov hodnotenia")
     frekvencia: float | None = Field(
         None, ge=0, le=100,
         description="Očakávaný počet incidentov tohto vzoru za rok. Ak chýba, použije sa podiel vzoru v odvetví.",
-    )
-    zdroj: Literal["API", "simulácia"] = Field(
-        "API", description="Pôvod hodnotenia. Generátor simulacia.py posiela hodnotu simulácia.",
-    )
-    skutocny_dopad: Literal["nízky", "stredný", "vysoký"] | None = Field(
-        None, description="Skutočný dopad, ak je známy (napríklad pri testovacom incidente z VCDB). Model ho nepoužíva.",
     )
 
 
@@ -76,24 +79,79 @@ def moznosti():
 @app.post("/api/hodnotenie", status_code=201, summary="Vyhodnotí incident a uloží výsledok do databázy")
 def hodnotenie(request: Request):
     _ensure_data()
-    incident = request.model_dump(exclude={"nazov", "frekvencia", "zdroj", "skutocny_dopad"})
-    errors = op.validate(incident)
-    if errors:
-        raise HTTPException(422, errors)
-    result = op.assess(incident, request.frekvencia)
-    record_id = op.save_assessment(
-        incident, result, source=request.zdroj, name=request.nazov, actual_impact=request.skutocny_dopad,
-    )
+    incident = request.model_dump(exclude={"nazov", "frekvencia", "asset_id", "finding_id", "case_id", "zdroj", "skutocny_dopad"})
+    try:
+        defaults = co.incident_input(request.asset_id)
+        if not incident["aktivum_variety"]:
+            incident["aktivum_variety"] = defaults["aktivum_variety"]
+        if not incident["typy_dat"]:
+            incident["typy_dat"] = defaults["typy_dat"]
+        record_id, result = co.assess_and_save(incident, request.asset_id, request.frekvencia, request.nazov,
+                                             request.finding_id, request.case_id, source=request.zdroj, actual_impact=request.skutocny_dopad)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
     return {"id": record_id, **result}
 
 
 @app.get("/api/hodnotenia", summary="Uložené hodnotenia zoradené podľa očakávanej straty")
 def hodnotenia():
-    records = op.load_assessments().drop(columns="vstup")
+    records = co.assessments().drop(columns="vstup")
     return _records(records)
 
 
-@app.get("/api/register", summary="Register 48 scenárov rizika z preskriptivna_udrzba.ipynb")
+@app.get("/api/register", summary="Plánovacie scenáre firmy HronTech")
 def register():
     _ensure_data()
-    return _records(op.load_register())
+    return _records(co.risk_register())
+
+
+@app.get("/api/firma", summary="Profil simulovanej firmy")
+def firma():
+    return co.profile()
+
+
+@app.get("/api/firma/aktiva", summary="Inventár aktív a webov")
+def aktiva():
+    return _records(co.assets())
+
+
+@app.get("/api/firma/zranitelnosti", summary="Modelové bezpečnostné zistenia")
+def zranitelnosti():
+    return _records(co.findings())
+
+
+@app.get("/api/firma/incidenty", summary="Evidované simulované incidenty")
+def incidenty():
+    return _records(co.cases())
+
+
+@app.get("/api/firma/scenare", summary="Pripravené scenáre simulácie")
+def scenare():
+    return co.SCENARIOS
+
+
+class SimulationRequest(BaseModel):
+    scenario: str
+    finding_id: str | None = None
+
+
+@app.post("/api/firma/simulacia", status_code=201, summary="Vytvorí modelový incident bez útoku na sieť")
+def simulacia(request: SimulationRequest):
+    try:
+        return co.start_simulation(request.scenario, request.finding_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+class FindingStatusRequest(BaseModel):
+    status: str
+    note: str = Field("", max_length=2000)
+
+
+@app.patch("/api/firma/zranitelnosti/{finding_id}", summary="Uloží stav riešenia zraniteľnosti")
+def stav_zranitelnosti(finding_id: str, request: FindingStatusRequest):
+    try:
+        co.set_finding_status(finding_id, request.status, request.note)
+        return co.finding(finding_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error

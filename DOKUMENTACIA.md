@@ -341,59 +341,26 @@ Každá stratégia rozhodne z odhadu a potom sa spočítajú jej náklady pri **
 
 ## 6. Aplikácia a integrácia do IS
 
-| Súčasť | Súbor | Úloha |
+Aktuálny IS safetyfirst je prispôsobený jednej simulovanej výrobnej firme **HronTech Strojárne, s. r. o.**, 82 zamestnancov, Banská Bystrica. Firma má 15 skupín aktív a 14 počiatočných modelových zraniteľností. Podrobný návod a API príklady sú v [README.md](README.md).
+
+| Vrstva | Implementácia | Úloha |
 | --- | --- | --- |
-| Frontend | [app.py](app.py) | Webová aplikácia Streamlit na <http://localhost:8501> |
-| API | [api.py](api.py) | REST API (FastAPI) na <http://localhost:8000>, dokumentácia na `/docs` |
-| Logika modelu | [opatrenia.py](opatrenia.py) | Prevod vstupu na znaky, predikcia dopadu, výber opatrenia, databáza |
-| Znaky modelu | [vcdb_model.py](vcdb_model.py) | Príprava znakov a kalibrované pravdepodobnosti, potrebné na načítanie modelu |
-| Simulácia | [simulacia.py](simulacia.py) | Generátor, ktorý posiela testovacie incidenty z VCDB na API (simulácia sledovania siete) |
-| Databáza | SQLite, tabuľka `hodnotenia` | Uložené hodnotenia z aplikácie aj z API |
-| Nasadenie | [Dockerfile](Dockerfile), [compose.yaml](compose.yaml) | Kontajnery `app` a `api`, spoločná databáza vo volume Dockeru |
+| Frontend | `app.py`, `frontend.py`, `firma_ui.py`, `static/interface.css` | firma, inventár, zraniteľnosti, simulácia, hodnotenie, história a plánovanie |
+| Firemná logika | `firma.py` | SQLite evidencia a väzby medzi aktívom, zistením, incidentom a hodnotením |
+| Model a preskripcia | `opatrenia.py`, `vcdb_model.py` | pôvodný model VCDB a výpočet ochrany s firemnými predpokladmi |
+| REST API | `api.py` | firemný profil, inventár, simulácia, vyhodnotenie a evidencia stavu zistení |
+| Databáza | SQLite | pôvodné `hodnotenia` a nové firemné tabuľky; zápis hodnotenia a jeho väzieb v jednej transakcii |
+| Nasadenie | Dockerfile a compose.yaml | web na porte 8501, API na porte 8000; funguje aj lokálne bez Dockera |
 
-### 6.1 Priebeh hodnotenia
+### Priebeh
 
-1. Analytik zadá incident tak, ako ho pozná hneď po odhalení: odvetvie, veľkosť organizácie, krajinu, cielenosť, typ aktéra a typ útoku, podrobné hodnoty (podrobný typ aktéra, spôsob a vektor útoku, aktívum, typ dát, motív, spôsob odhalenia) a či bola narušená integrita alebo dostupnosť. Formulár ponúka iba hodnoty, ktoré sa v `vcdb_clean.csv` vyskytujú aspoň 5-krát, lebo iné model nepozná.
-2. [opatrenia.py](opatrenia.py) prevedie vstup na riadok v tvare `vcdb_clean.csv`. Príznaky aktéra a akcie sa berú zo samostatného výberu typu aktéra a útoku, doplnené o typy, ktoré vyplývajú z podrobných hodnôt. Samostatný výber je nutný, lebo napríklad partner často nemá uvedený podrobný typ. Príznaky aktív a ransomvéru sa odvodia z podrobných hodnôt a vzor útoku rovnakými pravidlami ako v `priprava_dat.ipynb`.
-3. Uložený model LightGBM vráti kalibrované pravdepodobnosti tried dopadu (`calibrated_probabilities` z `vcdb_model.py`).
-4. Ročná frekvencia sa predvyplní podielom vzoru útoku v odvetví medzi reprezentatívnymi incidentmi (rovnako ako v notebooku) a analytik ju môže zmeniť.
-5. Opatrenie sa vyberie rovnakým výpočtom ako v [preskriptivna_udrzba.ipynb](preskriptivna_udrzba.ipynb): rovnaké predpoklady, opatrenia CIS z `vcdb_opatrenia_cis.csv` a opatrenie s najnižšími celkovými nákladmi, iba pre jeden zadaný incident.
-6. Výsledok sa uloží do tabuľky `hodnotenia` v SQLite.
+Analytik vyberie aktívum a otvorenú zraniteľnosť, prípadne spustí pripravený scenár simulácie. Vznikne evidovaný incident. Profil výroby a malej organizácie sa doplní automaticky, Slovensko sa mapuje na kategóriu ostatných krajín. Model predikuje rozsah úniku dát; preskriptívna logika porovná štyri opatrenia pri firemných cenách, stratách, frekvencii a horizonte. Výsledok sa uloží s väzbami a s kópiou ekonomických predpokladov. Zo zobrazeného výsledku možno otvoriť zistenie a zapísať stav jeho riešenia.
 
-**Overenie.** Príkaz `python opatrenia.py` prevedie 1 052 testovacích incidentov na vstup formulára a porovná pravdepodobnosti s predikciou modelu priamo nad pôvodným riadkom z `vcdb_clean.csv`. Najpravdepodobnejšia trieda aj vzor útoku sa zhodujú pri všetkých incidentoch, priemerný rozdiel pravdepodobnosti je 0,00003 a rozdiel nad 0,01 majú iba 2 incidenty (najviac 0,021), lebo obsahujú zriedkavé hodnoty, ktoré formulár neponúka. Bez samostatného výberu typu aktéra a útoku by sa líšilo 103 incidentov, najviac o 0,16. Výber opatrenia dáva pre všetkých 48 scenárov registra rovnaké opatrenie a stratu ako notebook.
+Ročný rozpočet je predvolene 45 000 €, straty podľa tried sú 5 000 / 50 000 / 500 000 €, ceny predstavujú 35 % cien základného modelu a horizont je tri roky. Firma ich môže v nastavení zmeniť. Výsledky notebookov vyššie používajú pôvodné predpoklady, preto sa ich sumy líšia od firemnej simulácie.
 
-### 6.2 Frontend
+Sedem plánovacích scenárov je zostavených ručne z firemných aktív. Frekvencie, zraniteľnosti, finančné hodnoty a účinnosť opatrení sú predpoklady, nie výsledok skenovania. Systém neodhaduje pravdepodobnosť zneužitia zraniteľnosti, fyzické poruchy výroby ani dobu odstávky. Počet kusov zariadení je evidencia a nevstupuje priamo do ML modelu. Jednorazová oprava zraniteľnosti je oddelená od ročného balíka CIS. Stav „Odstránená“ je zápis analytika, nie automatické overenie opravy.
 
-| Záložka | Obsah |
-| --- | --- |
-| Nové hodnotenie | formulár incidentu, pravdepodobnosti dopadu, očakávaná ročná strata, odporúčané opatrenie s opatreniami CIS a porovnanie všetkých 4 opatrení. Tlačidlo *Náhodný testovací incident* vyplní formulár incidentom z testovacej časti dát a ukáže jeho skutočný dopad. |
-| Uložené hodnotenia | záznamy z databázy zoradené podľa očakávanej straty, vstup hodnotenia, export do CSV, vymazanie |
-| Prehľad | grafy z uložených hodnotení: počet v čase podľa predikovaného dopadu, kumulatívna očakávaná strata, odporúčané opatrenia, najčastejšie vzory útokov; obnovujú sa každých 5 sekúnd |
-| Živé sledovanie | incidenty zo simulácie naživo (obnova každé 2 s): stav generátora, počet incidentov, vysoký dopad, zhoda predikcie so skutočným dopadom, očakávaná strata, tabuľka posledných incidentov a grafy straty v čase a vzorov útokov |
-| Register rizík | 48 scenárov z `vcdb_register_rizik.csv`, interaktívna mapa rizík, krivka zníženej straty s posuvníkom rozpočtu a porovnanie stratégií, počítané z `vcdb_predikcie.csv` rovnako ako grafy 7 až 9 |
-| Predpoklady | straty, ceny a účinnosť opatrení, ceny podľa vzoru útoku a prahy, od ktorých sa opatrenie oplatí |
-
-### 6.3 REST API
-
-| Metóda | Cesta | Popis |
-| --- | --- | --- |
-| GET | `/api/moznosti` | povolené hodnoty polí incidentu |
-| POST | `/api/hodnotenie` | vyhodnotí incident a uloží výsledok do databázy, pri neplatnom vstupe vráti 422 so zoznamom chýb; nepovinné polia `zdroj` (`API` alebo `simulácia`) a `skutocny_dopad` sa iba uložia, model ich nepoužíva |
-| GET | `/api/hodnotenia` | uložené hodnotenia zoradené podľa očakávanej straty |
-| GET | `/api/register` | register rizík z preskriptívnej analýzy |
-
-Aplikácia aj API používajú rovnaký modul `opatrenia.py` a rovnakú databázu, takže hodnotenie pridané cez API sa hneď zobrazí v aplikácii.
-
-### 6.4 Simulácia sledovania siete
-
-Generátor [simulacia.py](simulacia.py) nahrádza ručné vypĺňanie formulára a ukazuje, ako by sa modul napojil na systém sledovania siete (napríklad SIEM):
-
-1. Každých ~3 s (parameter `--interval`, náhodná odchýlka `--rozptyl`) vyberie incident z testovacej časti dát, ktorú model pri tréningu nevidel, rovnako ako tlačidlo *Náhodný testovací incident*.
-2. Pošle ho na `POST /api/hodnotenie` so zdrojom `simulácia` a so skutočným dopadom z VCDB.
-3. API incident vyhodnotí rovnakým výpočtom ako formulár a uloží ho do databázy.
-4. Záložka *Živé sledovanie* načítava databázu každé 2 sekundy a zobrazí nové incidenty, ich riziko a zhodu predikcie so skutočným dopadom.
-
-Generátor počká, kým API odpovedá, a pri výpadku API pokračuje ďalším pokusom. V Dockeri je ako služba `simulacia` v profile `simulacia`, takže sa spúšťa iba na požiadanie.
+História zobrazuje len firemné hodnotenia. Staršie všeobecné hodnotenia sa zachovajú v databáze. API aj frontend používajú rovnakú firemnú vrstvu a výsledky z API sú viditeľné v aplikácii. Testy v `tests/test_firma.py` pokrývajú integritu väzieb, ekonomické predpoklady, transakcie, históriu a stav riešenia.
 
 ## 7. Štruktúra projektu a spustenie
 
@@ -406,7 +373,6 @@ Generátor počká, kým API odpovedá, a pri výpadku API pokračuje ďalším 
 ├── preskriptivna_udrzba.ipynb   3. preskripcia opatrení
 ├── opatrenia.py                 hodnotenie incidentu a databáza
 ├── app.py, api.py               aplikácia Streamlit a REST API
-├── simulacia.py                 generátor incidentov pre živé sledovanie
 ├── figures/                     vizualizácie 1 až 9
 └── data/                        dáta a modely (mimo gitu)
 ```
@@ -431,7 +397,7 @@ Notebooky sa spúšťajú v tomto poradí, lebo každý používa výstupy predc
 | Prediktívna údržba | 2 ML algoritmy, porovnanie, metriky | logistická regresia a LightGBM, Macro F1, Accuracy, MAE, recall, precision, log loss, ROC AUC, bootstrap |
 | Preskriptívna údržba | aspoň 3 typy opatrení, aspoň 2 faktory, zdôvodnenie | 4 typy opatrení, 4 faktory (riziko, náklady, čas, priorita), prahy a zdôvodnenie |
 | Integrácia do IS | API, frontend, databáza | REST API vo FastAPI, aplikácia Streamlit, databáza SQLite, všetko nad modelom VCDB a v Dockeri |
-| Dokumentácia | algoritmy, výsledky, rozhodovacia logika | tento dokument, [KRATKA_DOKUMENTACIA.md](KRATKA_DOKUMENTACIA.md) a [VYSVETLENIE.md](VYSVETLENIE.md) |
+| Dokumentácia | algoritmy, výsledky, rozhodovacia logika | tento dokument a [VYSVETLENIE.md](VYSVETLENIE.md) |
 | BPMN | diagram procesu | splnené v rámci zadania č. 1 |
 
 ## 9. Obmedzenia
