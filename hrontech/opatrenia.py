@@ -9,6 +9,7 @@ ako riadok z vcdb_clean.csv.
 import json
 import os
 import sqlite3
+import time
 from contextlib import closing
 from datetime import datetime
 from functools import lru_cache
@@ -617,7 +618,28 @@ def azure_sql_driver():
 
 def connect(path=None):
     if uses_azure_sql(path):
-        return azure_sql_driver().connect(os.environ["AZURE_SQL_CONNECTION_STRING"], timeout=60)
+        driver = azure_sql_driver()
+        deadline = time.monotonic() + 120
+        delays = (5, 10, 20, 30, 30)
+        for attempt in range(len(delays) + 1):
+            try:
+                return driver.connect(
+                    os.environ["AZURE_SQL_CONNECTION_STRING"],
+                    timeout=max(1, min(60, int(deadline - time.monotonic()))),
+                )
+            except driver.OperationalError as error:
+                # Serverless SQL rejects connections while resuming (40613).
+                # Retry opening only: replaying a write could duplicate records.
+                message = str(error).lower()
+                transient = any(code in message for code in ("40613", "40197", "40501")) or (
+                    "database" in message and "not currently available" in message
+                )
+                remaining = deadline - time.monotonic()
+                if not transient or attempt == len(delays) or remaining <= 0:
+                    raise
+                time.sleep(min(delays[attempt], remaining))
+                if time.monotonic() >= deadline:
+                    raise
     path = Path(path or DB_PATH)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=10)
